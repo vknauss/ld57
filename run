@@ -1,0 +1,2 @@
+#!/usr/bin/sh
+meson install -C build --only-changed && cd install && ./game

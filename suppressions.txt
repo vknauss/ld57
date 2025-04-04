@@ -1,0 +1,6 @@
+leak:libpulse
+leak:libpipewire
+leak:libfontconfig
+leak:libwayland-client
+leak:libjack
+leak:libasound

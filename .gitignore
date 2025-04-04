@@ -1,0 +1,4 @@
+install
+subprojects/*
+!subprojects/*.wrap
+!subprojects/packagefiles/*

@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+revision = v3.2.1
+depth = 1
+method = cmake
+
+[provide]
+vma=VulkanMemoryAllocator_dep

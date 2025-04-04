@@ -1,0 +1,97 @@
+# Copied from upstream jolt Build/CMakeLists.txt
+# Maybe not all used, idk
+
+# When turning this option on, the library will be compiled using assertions. By default asserts are enabled in Debug build.
+option('use_asserts', type: 'boolean', value: false, description: 'Enable asserts')
+
+# When turning this option on, the library will be compiled using doubles for positions. This allows for much bigger worlds.
+option('double_precision', type: 'boolean', value: false, description: 'Use double precision math')
+
+# When turning this option on, the library will be compiled with debug symbols
+option('generate_debug_symbols', type: 'boolean', value: true, description: 'Generate debug symbols')
+
+# Which type of debug symbols to generate, e.g. using source-map when compiling with emscripten makes compilation a lot faster
+option('jph_debug_symbol_format', type: 'string', value: '', description: 'Which type of debug symbols to generate')
+
+# When turning this option on, the library will override the default CMAKE_CXX_FLAGS_DEBUG/RELEASE values, otherwise they will use the platform defaults
+option('override_cxx_flags', type: 'boolean', value: true, description: 'Override CMAKE_CXX_FLAGS_DEBUG/RELEASE')
+
+# When turning this option on, the library will be compiled in such a way to attempt to keep the simulation deterministic across platforms
+option('cross_platform_deterministic', type: 'boolean', value: false, description: 'Cross platform deterministic')
+
+# When turning this option on, the library will be compiled for ARM (aarch64-linux-gnu), requires compiling with clang
+option('cross_compile_arm', type: 'boolean', value: false, description: 'Cross compile to aarch64-linux-gnu')
+
+# When turning this option on, Jolt will be compiled as a shared library and public symbols will be exported.
+option('build_shared_libs', type: 'boolean', value: false, description: 'Compile Jolt as a shared library')
+
+# When turning this option on, the library will be compiled with interprocedural optimizations enabled, also known as link-time optimizations or link-time code generation.
+# Note that if you turn this on you need to use SET_INTERPROCEDURAL_OPTIMIZATION() or set(CMAKE_INTERPROCEDURAL_OPTIMIZATION true) to enable LTO specifically for your own project as well.
+# If you don't do this you may get an error: /usr/bin/ld: libJolt.a: error adding symbols: file format not recognized
+option('interprocedural_optimization', type: 'boolean', value: true, description: 'Enable interprocedural optimizations')
+
+# When turning this on, in Debug and Release mode, the library will emit extra code to ensure that the 4th component of a 3-vector is kept the same as the 3rd component
+# and will enable floating point exceptions during simulation to detect divisions by zero.
+# Note that this currently only works using MSVC. Clang turns Float2 into a SIMD vector sometimes causing floating point exceptions (the option is ignored).
+option('floating_point_exceptions_enabled', type: 'boolean', value: true, description: 'Enable floating point exceptions')
+
+# When turning this on, the library will be compiled with C++ exceptions enabled.
+# This adds some overhead and Jolt doesn't use exceptions so by default it is off.
+# option('cpp_exceptions_enabled', type: 'boolean', value: false, description: 'Enable C++ exceptions')
+
+# When turning this on, the library will be compiled with C++ RTTI enabled.
+# This adds some overhead and Jolt doesn't use RTTI so by default it is off.
+# option('cpp_rtti_enabled', type: 'boolean', value: false, description: 'Enable C++ RTTI')
+
+# Number of bits to use in ObjectLayer. Can be 16 or 32.
+option('object_layer_bits', type: 'integer', value: 16, description: 'Number of bits in ObjectLayer')
+
+# Select X86 processor features to use (if everything is off it will be SSE2 compatible)
+option('use_sse4_1', type: 'boolean', value: true, description: 'Enable SSE4.1')
+option('use_sse4_2', type: 'boolean', value: true, description: 'Enable SSE4.2')
+option('use_avx', type: 'boolean', value: true, description: 'Enable AVX')
+option('use_avx2', type: 'boolean', value: true, description: 'Enable AVX2')
+option('use_avx512', type: 'boolean', value: false, description: 'Enable AVX512')
+option('use_lzcnt', type: 'boolean', value: true, description: 'Enable LZCNT')
+option('use_tzcnt', type: 'boolean', value: true, description: 'Enable TZCNT')
+option('use_f16c', type: 'boolean', value: true, description: 'Enable F16C')
+option('use_fmadd', type: 'boolean', value: true, description: 'Enable FMADD')
+
+# Enable SIMD for the WASM build. Note that this is currently off by default since not all browsers support this.
+# See: https://caniuse.com/?search=WebAssembly%20SIMD (Safari got support in March 2023 and was the last major browser to get support).
+option('use_wasm_simd', type: 'boolean', value: false, description: 'Enable SIMD for WASM')
+
+# Enable all warnings
+option('enable_all_warnings', type: 'boolean', value: true, description: 'Enable all warnings and warnings as errors')
+
+# Setting to periodically trace broadphase stats to help determine if the broadphase layer configuration is optimal
+option('track_broadphase_stats', type: 'boolean', value: false, description: 'Track Broadphase Stats')
+
+# Setting to periodically trace narrowphase stats to help determine which collision queries could be optimized
+option('track_narrowphase_stats', type: 'boolean', value: false, description: 'Track Narrowphase Stats')
+
+# Enable the debug renderer in the Debug and Release builds. Note that DEBUG_RENDERER_IN_DISTRIBUTION will override this setting.
+option('debug_renderer_in_debug_and_release', type: 'boolean', value: true, description: 'Enable debug renderer in Debug and Release builds')
+
+# Setting to enable the debug renderer in all builds.
+# Note that enabling this reduces the performance of the library even if you're not drawing anything.
+option('debug_renderer_in_distribution', type: 'boolean', value: false, description: 'Enable debug renderer in all builds')
+
+# Enable the profiler in Debug and Release builds. Note that PROFILER_IN_DISTRIBUTION will override this setting.
+option('profiler_in_debug_and_release', type: 'boolean', value: true, description: 'Enable the profiler in Debug and Release builds')
+
+# Enable the profiler in all builds.
+# Note that enabling this reduces the performance of the library.
+option('profiler_in_distribution', type: 'boolean', value: false, description: 'Enable the profiler in all builds')
+
+# Setting this option will force the library to use malloc/free instead of allowing the user to override the memory allocator
+option('disable_custom_allocator', type: 'boolean', value: false, description: 'Disable support for a custom memory allocator')
+
+# Setting this option will force the library to use the STL vector instead of the custom Array class
+option('use_std_vector', type: 'boolean', value: false, description: 'Use std::vector instead of own Array class')
+
+# Setting this option will compile the ObjectStream class and RTTI attribute information
+option('enable_object_stream', type: 'boolean', value: true, description: 'Compile the ObjectStream class and RTTI attribute information')
+
+# Enable installation
+option('enable_install', type: 'boolean', value:  true, description: 'Generate installation target')

@@ -1,0 +1,2 @@
+option('use_validation_layers', type: 'boolean', value: false)
+option('use_portability_extension', type: 'boolean', value: false)

@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/YaaZ/VulkanMemoryAllocator-Hpp.git
+revision = v3.2.1
+depth = 1
+method = cmake
+
+[provide]
+vma-hpp = VulkanMemoryAllocator_Hpp_dep
