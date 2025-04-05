@@ -59,7 +59,7 @@ struct Enemy
 
     // uint32_t sprite = 0;
     glm::vec3 position = glm::vec3(0);
-    glm::quat orientation = glm::identity<glm::quat>();
+    float angle = 0;
     glm::vec2 extents = glm::vec3(0.5);
     State state = State::Idle;
     State lastState = State::Idle;
@@ -73,24 +73,6 @@ enum class SpriteDirection
 {
     d0, d45, d90, d135, d180, d225, d270, d315
 };
-
-/* enum class WeaponState
-{
-    Initial, Targeting, Shooting, 
-}; */
-
-/* struct CharacterListener final : public JPH::CharacterContactListener
-{
-    glm::vec3 latestSolverVelocity = glm::vec3(0);
-    void OnContactSolve(const JPH::CharacterVirtual* inCharacter, const JPH::BodyID& inBodyID2, const JPH::SubShapeID& inSubShapeID, JPH::RVec3Arg inContactPosition, JPH::Vec3Arg inContactNormal, JPH::Vec3Arg inContactVelocity, const JPH::PhysicsMaterial* inContactMaterial, JPH::Vec3Arg inCharacterVelocity, JPH::Vec3& ioNewCharacterVelocity)
-    {
-        if (glm::distance(jph_to_glm(ioNewCharacterVelocity), jph_to_glm(inCharacterVelocity)) > 0.1)
-        {
-            std::cout << inBodyID2.GetIndex() << " in ch v: " << glm::to_string(jph_to_glm(inCharacterVelocity)) << ", io new v: " << glm::to_string(jph_to_glm(ioNewCharacterVelocity)) << std::endl;
-        }
-        latestSolverVelocity = jph_to_glm(ioNewCharacterVelocity);
-    }
-}; */
 
 static std::vector<uint32_t> getIndexedTextures(eng::ResourceLoaderInterface& resourceLoader, const std::format_string<uint32_t>& basePath, uint32_t firstIndex, uint32_t count)
 {
@@ -111,6 +93,8 @@ struct GameLogic final : eng::GameLogicInterface
         uint32_t gun;
         uint32_t muzzle_flash;
         uint32_t blood;
+        uint32_t player;
+        uint32_t rat;
     } textures;
 
     std::vector<std::pair<uint32_t, uint32_t>> skeletonResources;
@@ -121,11 +105,7 @@ struct GameLogic final : eng::GameLogicInterface
     std::map<SpriteDirection, std::vector<uint32_t>> plasmaTextures;
 
     glm::vec3 cameraPosition = { 0, 2, 0 };
-    float cameraVerticalAngle = 0;
-    glm::quat playerOrientation = glm::identity<glm::quat>();
-    glm::quat cameraOrientation = glm::identity<glm::quat>();
-    int lockedOnEnemy = -1;
-    float skeletonAngle = 0;
+    float playerAngle = 0;
     bool wasShooting = false;
     bool showMuzzleFlash = false;
     float muzzleFlashTimer = 0;
@@ -181,7 +161,6 @@ struct GameLogic final : eng::GameLogicInterface
 
     std::vector<JPH::Ref<JPH::Shape>> shapeRefs;
     JPH::Ref<JPH::CharacterVirtual> playerCharacter;
-    // CharacterListener characterListener;
 
     std::vector<Enemy> enemies;
     std::vector<eng::Light> lights;
@@ -205,8 +184,8 @@ struct GameLogic final : eng::GameLogicInterface
         glm::vec3 direction(0);
         if (glm::dot(moveInput, moveInput) > glm::epsilon<float>())
         {
-            const glm::vec3 forward = playerOrientation * glm::vec3(0, 0, -1);
-            const glm::vec3 right = playerOrientation * glm::vec3(1, 0, 0);
+            const glm::vec3 forward = glm::vec3(0, 0, -1);
+            const glm::vec3 right = glm::vec3(1, 0, 0);
             direction = moveInput.y * forward + moveInput.x * right;
             if (auto len = glm::length(direction); len > 1.0f)
             {
@@ -218,95 +197,7 @@ struct GameLogic final : eng::GameLogicInterface
         playerCharacter->SetLinearVelocity(glm_to_jph(movementSpeed * direction + glm::vec3(0, velocity.y, 0)));
     }
 
-    void updateCameraRotation(const glm::vec2& lookInput)
-    {
-        const float newCameraVerticalAngle = cameraVerticalAngle + lookInput.y;
-        if (newCameraVerticalAngle >= minCameraVerticalAngle && newCameraVerticalAngle <= maxCameraVerticalAngle)
-        {
-            cameraVerticalAngle = newCameraVerticalAngle;
-        }
-        
-        const auto horizontalRotation = glm::angleAxis(lookInput.x, glm::vec3(0, 1, 0));
-        playerOrientation = glm::normalize(horizontalRotation * playerOrientation);
-        cameraOrientation = glm::normalize(playerOrientation * glm::angleAxis(cameraVerticalAngle, glm::vec3(1, 0, 0)));
-    }
-
-    void updateCameraRotationLockedOn(const float deltaTime)
-    {
-        const glm::vec3 deltaPos = enemies[lockedOnEnemy].position - cameraPosition;
-        const glm::vec3 desiredDirection = glm::normalize(glm::vec3(deltaPos.x, 0, deltaPos.z));
-        const float desiredVerticalAngle = glm::clamp(glm::normalize(deltaPos).y, minSinCameraVerticalAngle, maxSinCameraVerticalAngle);
-        const float interpolation = glm::min(lockOnInterpolationStrength * deltaTime, 1.0f);
-        playerOrientation = glm::slerp(playerOrientation, glm::rotation(glm::vec3(0, 0, -1), desiredDirection), interpolation);
-        cameraVerticalAngle = glm::mix(cameraVerticalAngle, desiredVerticalAngle, interpolation);
-        cameraOrientation = glm::normalize(playerOrientation * glm::angleAxis(cameraVerticalAngle, glm::vec3(1, 0, 0)));
-    }
-
-    void updateLockedOnEnemy()
-    {
-        const glm::vec3 cameraDirection = cameraOrientation * glm::vec3(0, 0, -1);
-        float bestScore = 0;
-        for (uint32_t i = 0; i < enemies.size(); ++i)
-        {
-            const glm::vec3 deltaPos = enemies[i].position - cameraPosition;
-            const float distance = glm::length(deltaPos);
-            const float cosAngle = glm::dot(deltaPos, cameraDirection) / distance;
-            if (cosAngle >= targetMinCos)
-            {
-                const JPH::RRayCast raycast(glm_to_jph(cameraPosition), glm_to_jph(deltaPos));
-                JPH::RayCastResult raycastResult;
-                if (physicsWorld->getPhysicsSystem().GetNarrowPhaseQuery().CastRay(raycast, raycastResult, JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(0))))
-                {
-                    continue;
-                }
-
-                const float score = cosAngle / std::max(distance, 1.0f);
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    lockedOnEnemy = i;
-                }
-            }
-        }
-    }
-
-    void updateLockedOnEnemyInDirection(const glm::vec2& direction)
-    {
-        const glm::vec3 cameraDirection = cameraOrientation * glm::vec3(0, 0, -1);
-        const glm::vec3 toTarget = enemies[lockedOnEnemy].position - cameraPosition;
-        const glm::vec3 toTargetProjected = toTarget / glm::dot(toTarget, cameraDirection);
-        const glm::vec3 desiredProjectionDeltaWorldSpace = cameraOrientation * glm::vec3(direction, 0);
-        float bestScore = -1;
-
-        for (uint32_t i = 0; i < enemies.size(); ++i)
-        {
-            if (static_cast<int>(i) != lockedOnEnemy)
-            {
-                const glm::vec3 deltaPos = enemies[i].position - cameraPosition;
-                const float distance = glm::length(deltaPos);
-                const float cosAngle = glm::dot(1.0f / distance * deltaPos, cameraDirection);
-                if (cosAngle >= targetInDirectionMinCos)
-                {
-                    const JPH::RRayCast raycast(glm_to_jph(cameraPosition), glm_to_jph(deltaPos));
-                    JPH::RayCastResult raycastResult;
-                    if (physicsWorld->getPhysicsSystem().GetNarrowPhaseQuery().CastRay(raycast, raycastResult, JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(0))))
-                    {
-                        continue;
-                    }
-
-                    const glm::vec3 deltaPosProjected = deltaPos / glm::dot(deltaPos, cameraDirection);
-                    const float score = glm::dot(deltaPosProjected - toTargetProjected, desiredProjectionDeltaWorldSpace);
-                    if (score > 0 && (bestScore < 0 || score < bestScore))
-                    {
-                        bestScore = score;
-                        lockedOnEnemy = i;
-                    }
-                }
-            }
-        }
-    }
-
-    void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input) override
+    void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app) override
     {
         physicsWorld.reset(fff::createPhysicsWorld());
 
@@ -316,6 +207,8 @@ struct GameLogic final : eng::GameLogicInterface
             .gun = resourceLoader.loadTexture("resources/textures/gun.png"),
             .muzzle_flash = resourceLoader.loadTexture("resources/textures/muzzle_flash.png"),
             .blood = resourceLoader.loadTexture("resources/textures/blood.png"),
+            .player = resourceLoader.loadTexture("resources/textures/player.png"),
+            .rat = resourceLoader.loadTexture("resources/textures/rat.png"),
         };
 
         inputMappings = {
@@ -323,8 +216,8 @@ struct GameLogic final : eng::GameLogicInterface
             .right = input.mapKey(input.createMapping(), SDL_GetScancodeFromKey(SDLK_D, nullptr)),
             .forward = input.mapKey(input.createMapping(), SDL_GetScancodeFromKey(SDLK_W, nullptr)),
             .back = input.mapKey(input.createMapping(), SDL_GetScancodeFromKey(SDLK_S, nullptr)),
-            .mouseLookX = input.mapCursor(input.createMapping(), eng::InputInterface::CursorAxis::X, eng::InputInterface::RealStateEvent::Delta),
-            .mouseLookY = input.mapCursor(input.createMapping(), eng::InputInterface::CursorAxis::Y, eng::InputInterface::RealStateEvent::Delta),
+            .mouseLookX = input.mapCursor(input.createMapping(), eng::InputInterface::CursorAxis::X),
+            .mouseLookY = input.mapCursor(input.createMapping(), eng::InputInterface::CursorAxis::Y),
             .gpLeftStickXAxis = input.mapGamepadAxis(input.createMapping(), SDL_GAMEPAD_AXIS_LEFTX),
             .gpLeftStickYAxis = input.mapGamepadAxis(input.createMapping(), SDL_GAMEPAD_AXIS_LEFTY),
             .gpRightStickXAxis = input.mapGamepadAxis(input.createMapping(), SDL_GAMEPAD_AXIS_RIGHTX),
@@ -394,7 +287,7 @@ struct GameLogic final : eng::GameLogicInterface
         glm::vec3 playerStartPosition(0, 1, 0);
         glm::quat playerStartOrientation = glm::identity<glm::quat>();
 
-        const auto& enemyShape = shapeRefs.emplace_back(new JPH::SphereShape(1.0f));
+        const auto& enemyShape = shapeRefs.emplace_back(new JPH::SphereShape(0.25f));
 
         for (const auto& entity : map.entities)
         {
@@ -423,7 +316,7 @@ struct GameLogic final : eng::GameLogicInterface
 
                     enemies.push_back(Enemy {
                                 .position = position,
-                                .extents = glm::vec2(1, 1),
+                                .extents = glm::vec2(0.25, 0.25),
                                 .character = new JPH::Character(&characterSettings, glm_to_jph(position), JPH::Quat::sIdentity(), 0, &physicsWorld->getPhysicsSystem()),
                             });
                     enemies.back().character->AddToPhysicsSystem();
@@ -456,8 +349,7 @@ struct GameLogic final : eng::GameLogicInterface
         playerCharacter = new JPH::CharacterVirtual(&characterSettings,
                 glm_to_jph(playerStartPosition), glm_to_jph(playerStartOrientation), &physicsWorld->getPhysicsSystem());
 
-        playerOrientation = playerStartOrientation;
-        cameraOrientation = playerStartOrientation;
+        app.setWantsCursorLock(true);
     }
 
     SpriteDirection getSpriteDirection(const glm::vec3& forward, const glm::vec3& right, const glm::vec3& entityFacingDirection)
@@ -509,11 +401,12 @@ struct GameLogic final : eng::GameLogicInterface
         sceneLayer.spriteInstances.clear();
         sceneLayer.geometryInstances.clear();
         sceneLayer.overlaySpriteInstances.clear();
-        sceneLayer.view = glm::translate(glm::mat4_cast(glm::inverse(cameraOrientation)), -cameraPosition);
+        sceneLayer.view = glm::translate(glm::lookAt(glm::vec3(0), glm::vec3(0, -1, 0), glm::vec3(0, 0, -1)), -cameraPosition);
         sceneLayer.viewport = { .offset = { 0, framebufferHeight }, .extent = { framebufferWidth, -static_cast<float>(framebufferHeight) } };
         sceneLayer.scissor = { .extent = { framebufferWidth, framebufferHeight } };
         sceneLayer.projection = glm::perspectiveRH_ZO(0.25f * glm::pi<float>(), aspectRatio, 0.1f, 100.f);
         sceneLayer.lights.assign(lights.begin(), lights.end());
+        sceneLayer.ambientLight = glm::vec3(0);
 
         sceneLayer.decals.clear();
         sceneLayer.decals.insert(sceneLayer.decals.end(), bloodDecals.begin(), bloodDecals.end());
@@ -533,11 +426,12 @@ struct GameLogic final : eng::GameLogicInterface
             sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
                         .position = enemy.position,
                         .scale = glm::vec3(enemy.extents, 1),
-                        .textureIndex = enemyTextures[getSpriteDirectionToCamera(enemy.position, enemy.orientation)],
+                        .angle = enemy.angle,
+                        .textureIndex = textures.rat,
                         .tintColor = enemy.state == Enemy::State::Damaged ? glm::vec4(1.0, 0.5, 0.5, 1.0) : glm::vec4(1.0),
                     });
 
-            if (static_cast<int>(i) == lockedOnEnemy)
+            /* if (static_cast<int>(i) == lockedOnEnemy)
             {
                 sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
                             .position = enemy.position,
@@ -550,18 +444,30 @@ struct GameLogic final : eng::GameLogicInterface
                             .scale = glm::vec3(0.1, 0.02, 1.0),
                             .tintColor = glm::vec4(1, 0, 0, 1),
                         });
-            }
+            } */
         }
 
         for (const auto& [position, rotation] : plasmas)
         {
             sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
                         .position = position,
-                        .textureIndex = plasmaTextures[getSpriteDirectionToCamera(position, rotation)][animationCounter],
+                        .textureIndex = plasmaTextures[getSpriteDirection(glm::vec3(0, -1, 0), glm::vec3(1, 0, 0), rotation * glm::vec3(0, 0, -1))][animationCounter],
                     });
         }
 
-        auto& overlayLayer = scene.layers()[1];
+        sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
+                    .position = jph_to_glm(playerCharacter->GetPosition()),
+                    .scale = glm::vec3(0.25),
+                    .angle = playerAngle,
+                    .textureIndex = textures.player,
+                });
+
+        sceneLayer.lights.push_back(eng::Light {
+                    .position = jph_to_glm(playerCharacter->GetPosition()) + glm::angleAxis(playerAngle, glm::vec3(0, 1, 0)) * glm::vec3(0.25, 2, 0),
+                    .intensity = glm::vec3(5),
+                });
+
+        /* auto& overlayLayer = scene.layers()[1];
         overlayLayer.spriteInstances.clear();
         overlayLayer.geometryInstances.clear();
         overlayLayer.overlaySpriteInstances.clear();
@@ -581,15 +487,15 @@ struct GameLogic final : eng::GameLogicInterface
                         .position = cameraPosition + cameraOrientation * glm::vec3(0, 0, -1),
                         .intensity = glm::vec3(1, 1, 0),
                     });
-        }
+        } */
 
-        overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
+        /* overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
                     .position = { 0.5f, -0.5f, 0.0f },
                     .scale = { 0.5f, 0.5f, 1.0f },
                     .textureIndex = textures.gun,
-                });
+                }); */
 
-        for (const auto& [materialResource, geometryResource] : skeletonResources)
+        /* for (const auto& [materialResource, geometryResource] : skeletonResources)
         {
             overlayLayer.geometryInstances.push_back(eng::GeometryInstance {
                         .position = { -1.0f, -0.35f, 0.0f },
@@ -598,7 +504,7 @@ struct GameLogic final : eng::GameLogicInterface
                         .textureIndex = materialResource,
                         .geometryIndex = geometryResource,
                     });
-        }
+        } */
     }
 
     void enemyUpdateDamaged(Enemy& enemy, const float deltaTime)
@@ -609,7 +515,7 @@ struct GameLogic final : eng::GameLogicInterface
         }
     }
 
-    void runFrame(eng::SceneInterface& scene, eng::InputInterface& input, const double deltaTime) override
+    void runFrame(eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, const double deltaTime) override
     {
         animationTimer += deltaTime;
         if (animationTimer >= 1.0)
@@ -618,9 +524,10 @@ struct GameLogic final : eng::GameLogicInterface
         }
         animationCounter = static_cast<uint32_t>(animationFPS * animationTimer);
 
+        const auto [windowWidth, windowHeight] = app.getWindowSize();
         const glm::vec2 mouseLookInput = {
-            -lookSensitivity * input.getReal(inputMappings.mouseLookX),
-            -lookSensitivity * input.getReal(inputMappings.mouseLookY),
+            input.getReal(inputMappings.mouseLookX) - 0.5f * windowWidth,
+            input.getReal(inputMappings.mouseLookY) - 0.5f * windowHeight,
         };
 
         const glm::vec2 gamepadLookInput = {
@@ -628,53 +535,13 @@ struct GameLogic final : eng::GameLogicInterface
             input.getReal(inputMappings.gpRightStickYAxis),
         };
 
-        if (lockedOnEnemy >= 0 && lockedOnEnemy < enemies.size())
+        if (glm::any(glm::greaterThan(glm::abs(mouseLookInput), glm::vec2(0))))
         {
-            updateCameraRotationLockedOn(deltaTime);
-
-            if (glm::dot(gamepadLookInput, gamepadLookInput) >= flickThreshold * flickThreshold)
-            {
-                const float distance = glm::length(gamepadLookInput) - flickThreshold;
-                if (distance > maxDistanceOutOfFlickThreshold)
-                {
-                    flickDirection = gamepadLookInput;
-                    maxDistanceOutOfFlickThreshold = distance;
-                }
-                timeExitedFlickThreshold += deltaTime;
-            }
-            else
-            {
-                if (timeExitedFlickThreshold > 0.0f && timeExitedFlickThreshold <= flickDetectionMaxTime && maxDistanceOutOfFlickThreshold >= flickDetectionMinDistance)
-                {
-                    updateLockedOnEnemyInDirection(glm::normalize(flickDirection));
-                }
-                maxDistanceOutOfFlickThreshold = 0.0f;
-                timeExitedFlickThreshold = 0.0f;
-            }
-
-            if (glm::any(glm::greaterThan(glm::abs(gamepadLookInput), glm::vec2(flickThreshold))))
-            {
-                // updateCameraRotation(static_cast<float>(-2.0f * deltaTime) * gamepadLookInput);
-            }
-
-            const JPH::RRayCast raycast(glm_to_jph(cameraPosition), glm_to_jph(enemies[lockedOnEnemy].position - cameraPosition));
-            JPH::RayCastResult raycastResult;
-            if (physicsWorld->getPhysicsSystem().GetNarrowPhaseQuery().CastRay(raycast, raycastResult, JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(0))))
-            {
-                lockedOnEnemy = -1;
-            }
+            playerAngle = atan2(-mouseLookInput.x, -mouseLookInput.y);
         }
-        else
+        else if (glm::any(glm::greaterThan(glm::abs(gamepadLookInput), glm::vec2(0.2))))
         {
-            lockedOnEnemy = -1;
-            if (glm::any(glm::greaterThan(glm::abs(mouseLookInput), glm::vec2(0))))
-            {
-                updateCameraRotation(mouseLookInput);
-            }
-            else if (glm::any(glm::greaterThan(glm::abs(gamepadLookInput), glm::vec2(0.2))))
-            {
-                updateCameraRotation(static_cast<float>(-gamepadLookSensitivity * deltaTime) * gamepadLookInput);
-            }
+            playerAngle = atan2(gamepadLookInput.y, gamepadLookInput.x);
         }
 
         const glm::vec2 keyboardMoveInput = {
@@ -699,7 +566,7 @@ struct GameLogic final : eng::GameLogicInterface
             updatePlayerPosition(glm::vec2(0), deltaTime);
         }
 
-        if (input.getBoolean(inputMappings.target))
+        /* if (input.getBoolean(inputMappings.target))
         {
             if (lockedOnEnemy == -1)
             {
@@ -709,9 +576,9 @@ struct GameLogic final : eng::GameLogicInterface
         else
         {
             lockedOnEnemy = -1;
-        }
+        } */
 
-        if (input.getBoolean(inputMappings.shoot))
+        /* if (input.getBoolean(inputMappings.shoot))
         {
             if (!wasShooting)
             {
@@ -748,7 +615,7 @@ struct GameLogic final : eng::GameLogicInterface
         else
         {
             wasShooting = false;
-        }
+        } */
 
         if (showMuzzleFlash)
         {
@@ -762,7 +629,6 @@ struct GameLogic final : eng::GameLogicInterface
         for (auto& enemy : enemies)
         {
             enemy.position = jph_to_glm(enemy.character->GetPosition());
-            enemy.orientation = jph_to_glm(enemy.character->GetRotation());
 
             if (enemy.state != enemy.lastState)
             {
@@ -794,18 +660,16 @@ struct GameLogic final : eng::GameLogicInterface
             if (enemy.health <= 0)
             {
                 enemy.state = Enemy::State::Dead;
-                if (lockedOnEnemy != -1 && &enemies[lockedOnEnemy] == &enemy)
+                /* if (lockedOnEnemy != -1 && &enemies[lockedOnEnemy] == &enemy)
                 {
                     lockedOnEnemy = -1;
-                }
+                } */
             }
 
             enemy.stateTime += deltaTime;
         }
 
         std::erase_if(enemies, [](const auto& enemy){ return enemy.lastState == Enemy::State::Dead; });
-
-        skeletonAngle += glm::pi<float>() * deltaTime;
 
         physicsWorld->update(deltaTime);
 
@@ -874,7 +738,7 @@ struct GameLogic final : eng::GameLogicInterface
         playerCharacter->SetLinearVelocity(glm_to_jph(velocity));
         physicsWorld->updateCharacter(*playerCharacter, deltaTime);
 
-        cameraPosition = jph_to_glm(playerCharacter->GetPosition()) + glm::vec3(0, 0.8, 0);
+        cameraPosition = jph_to_glm(playerCharacter->GetPosition()) + glm::vec3(0, 5, 0);
 
         render(scene);
     }

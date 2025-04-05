@@ -373,6 +373,28 @@ struct Scene final : public SceneInterface
     std::pair<uint32_t, uint32_t> framebufferSize_;
 };
 
+struct AppInterfaceProvider final : public AppInterface
+{
+    SDL_Window* window;
+
+    explicit AppInterfaceProvider(SDL_Window* window) :
+        window(window)
+    {}
+
+    void setWantsCursorLock(const bool value) override
+    {
+        // SDL_SetWindowRelativeMouseMode(window, value);
+        SDL_SetWindowMouseGrab(window, value);
+    }
+
+    std::pair<uint32_t, uint32_t> getWindowSize() const override
+    {
+        int width, height;
+        SDL_GetWindowSize(window, &width, &height);
+        return { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
+    }
+};
+
 template<auto T>
 struct InitShim {};
 
@@ -409,6 +431,7 @@ class Application
     ResourceLoader resourceLoader;
     Scene scene;
     InputManager inputManager;
+    AppInterfaceProvider appInterface;
     InitShim<&GameLogicInterface::init> gameLogicInit;
     std::optional<std::pair<AllocatedBuffer, AllocatedBuffer>> geometryBuffers;
     InitShim<&LoaderUtility::commit> loaderUtilityCommit;
@@ -444,7 +467,8 @@ public:
         textures(),
         geometry(),
         resourceLoader(device, *allocator, textureLoader, geometryLoader, textures, geometry),
-        gameLogicInit(*gameLogic, resourceLoader, scene, inputManager),
+        appInterface(window),
+        gameLogicInit(*gameLogic, resourceLoader, scene, inputManager, appInterface),
         geometryBuffers(geometry.empty()
                 ? std::nullopt
                 : std::optional{ geometryLoader.createGeometryVertexAndIndexBuffers() }),
@@ -524,7 +548,7 @@ public:
     SDL_AppResult RunFrame()
     {
         auto time = SDL_GetTicksNS() * 1.e-9;
-        gameLogic->runFrame(scene, inputManager, time - lastTime);
+        gameLogic->runFrame(scene, inputManager, appInterface, time - lastTime);
         lastTime = time;
 
         renderer.nextFrame();

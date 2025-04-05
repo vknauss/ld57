@@ -17,9 +17,10 @@ void InputManager::handleMouseButton(const int button, const bool down)
 
 void InputManager::handleMouseMotion(const float x, const float y, const float dx, const float dy)
 {
-    // TODO: handle deltas properly
     updateStateReal(cursorMap, static_cast<int>(CursorAxis::X), x);
     updateStateReal(cursorMap, static_cast<int>(CursorAxis::Y), y);
+    updateStateDeltaReal(cursorMap, static_cast<int>(CursorAxis::X), dx);
+    updateStateDeltaReal(cursorMap, static_cast<int>(CursorAxis::Y), dy);
 }
 
 void InputManager::handleGamepadConnection(const int gamepad, const bool connected)
@@ -267,5 +268,15 @@ void InputManager::updateStateReal(const std::map<int, uint32_t>& map, const int
     if (auto it = map.find(code); it != map.end())
     {
         inputs[it->second].state.real = state;
+    }
+}
+
+void InputManager::updateStateDeltaReal(const std::map<int, uint32_t>& map, const int code, const double delta)
+{
+    if (auto it = map.find(code); it != map.end())
+    {
+        // this looks janky bc it is
+        auto& inp = inputs[it->second];
+        inp.previousState.real = inp.state.real - delta;
     }
 }

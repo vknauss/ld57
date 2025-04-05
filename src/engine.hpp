@@ -126,12 +126,24 @@ namespace eng
         virtual double getReal(const uint32_t mapping) const = 0;
     };
 
+    struct AppInterface
+    {
+        virtual void setWantsCursorLock(const bool value) = 0;
+        virtual std::pair<uint32_t, uint32_t> getWindowSize() const = 0;
+    };
+
     struct GameLogicInterface
     {
         virtual ~GameLogicInterface() = default;
 
-        virtual void init(ResourceLoaderInterface& resourceLoader, SceneInterface& scene, InputInterface& input) = 0;
-        virtual void runFrame(SceneInterface& scene, InputInterface& input, const double deltaTime) = 0;
+        virtual void init(ResourceLoaderInterface& resourceLoader,
+                SceneInterface& scene,
+                InputInterface& input,
+                AppInterface& app) = 0;
+        virtual void runFrame(SceneInterface& scene,
+                InputInterface& input,
+                AppInterface& app,
+                const double deltaTime) = 0;
         virtual void cleanup() = 0;
     };
 

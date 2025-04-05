@@ -82,11 +82,8 @@ namespace eng
         uint32_t mapGamepadAxis(const uint32_t mapping, const int axis, const RealStateEvent, const float param) override;
         uint32_t mapGamepadButton(const uint32_t mapping, const int button, const BoolStateEvent) override;
 
-        bool getBoolean(const uint32_t mapping/* , const BoolStateEvent event */) const override;
-        double getReal(const uint32_t mapping/* , const RealStateEvent event */) const override;
-        /* bool getDown(const uint32_t mapping) const;
-        bool getPressed(const uint32_t mapping) const;
-        bool getReleased(const uint32_t mapping) const; */
+        bool getBoolean(const uint32_t mapping) const override;
+        double getReal(const uint32_t mapping) const override;
 
         void nextFrame();
 
@@ -103,6 +100,7 @@ namespace eng
         uint32_t getInputIndex(std::map<int, uint32_t>& map, const int code, Input&& input);
         void updateStateBoolean(const std::map<int, uint32_t>& map, const int code, const bool state);
         void updateStateReal(const std::map<int, uint32_t>& map, const int code, const double state);
+        void updateStateDeltaReal(const std::map<int, uint32_t>& map, const int code, const double delta);
 
         std::vector<Input> inputs;
         std::vector<Mapping> mappings;
