@@ -201,21 +201,30 @@ struct GameLogic final : eng::GameLogicInterface
 
     void generateRooms(const uint64_t seed = 0, const uint32_t width = 50, const uint32_t height = 35, const uint32_t partitionedRoomCount = 20, const uint32_t targetRoomCount = 8, const uint32_t minSplitDimension = 4, const uint32_t minDoorOverlap = 2)
     {
-        struct RoomNode {
+        struct Room {
             uint32_t x, y;
             uint32_t width, height;
-            int axis = 0;
-            uint32_t children[2];
         };
-        std::vector<RoomNode> roomNodes;
-        auto compareRoomIndices = [&](auto left, auto right) {
-            return std::min(roomNodes[left].width, roomNodes[left].height) < std::min(roomNodes[right].width, roomNodes[right].height);
-        };
-        std::priority_queue<uint32_t, std::vector<uint32_t>, decltype(compareRoomIndices)> roomIndicesQueue(compareRoomIndices);
-        roomNodes.push_back(RoomNode { .x = 0, .y = 0, .width = width, .height = height });
-        roomIndicesQueue.push(roomNodes.size() - 1);
 
-        auto printRoomChars = [&](std::vector<bool> marked = {}, std::vector<std::pair<uint32_t, uint32_t>> doors = {}) {
+        struct RoomEdge
+        {
+            uint32_t nodes[2];
+            int overlap = 0;
+            uint32_t x, y;
+        };
+
+        struct RoomEdgeRecord
+        {
+            uint32_t nodes[2];
+            uint32_t index;
+        };
+
+        std::mt19937_64 prng;
+        prng.seed(seed);
+
+        std::vector<Room> rooms;
+
+        auto printRoomChars = [&](const std::vector<bool>& marked = {}, const std::vector<RoomEdge>& doors = {}) {
             std::vector<char> roomChars((height + 1) * (width + 2), ' ');
 
             for (uint32_t i = 0; i <= height; ++i)
@@ -223,202 +232,262 @@ struct GameLogic final : eng::GameLogicInterface
                 roomChars[i * (width + 2) + width + 1] = '\n';
             }
 
-            if (marked.size() == roomNodes.size()) for(uint32_t index = 0; index < roomNodes.size(); ++index) if (marked[index])
+            if (marked.size() == rooms.size()) for(uint32_t index = 0; index < rooms.size(); ++index) if (marked[index])
             {
-                for (uint32_t i = 0; i <= roomNodes[index].width; ++i)
+                for (uint32_t i = 0; i <= rooms[index].width; ++i)
                 {
-                    for (uint32_t j = 0; j <= roomNodes[index].height; ++j)
+                    for (uint32_t j = 0; j <= rooms[index].height; ++j)
                     {
-                        roomChars[(roomNodes[index].y + j) * (width + 2) + roomNodes[index].x + i] = '/';
+                        roomChars[(rooms[index].y + j) * (width + 2) + rooms[index].x + i] = '/';
                     }
                 }
             }
 
-            for (const auto& roomNode : roomNodes)
+            for (const auto& room : rooms)
             {
-                if (roomNode.axis == 0)
+                for (uint32_t i = 0; i <= room.width; ++i)
                 {
-                    for (uint32_t i = 0; i <= roomNode.width; ++i)
-                    {
-                        roomChars[roomNode.y * (width + 2) + roomNode.x + i] = 'X';
-                        roomChars[(roomNode.y + roomNode.height) * (width + 2) + roomNode.x + i] = 'X';
-                    }
-                    for (uint32_t i = 0; i <= roomNode.height; ++i)
-                    {
-                        roomChars[(roomNode.y + i) * (width + 2) + roomNode.x] = 'X';
-                        roomChars[(roomNode.y + i) * (width + 2) + roomNode.x + roomNode.width] = 'X';
-                    }
+                    roomChars[room.y * (width + 2) + room.x + i] = 'X';
+                    roomChars[(room.y + room.height) * (width + 2) + room.x + i] = 'X';
+                }
+                for (uint32_t i = 0; i <= room.height; ++i)
+                {
+                    roomChars[(room.y + i) * (width + 2) + room.x] = 'X';
+                    roomChars[(room.y + i) * (width + 2) + room.x + room.width] = 'X';
                 }
             }
 
-            for (const auto [x, y] : doors)
+            for (const auto& edge : doors)
             {
-                roomChars[y * (width + 2) + x] = '_';
+                roomChars[edge.y * (width + 2) + edge.x] = '_';
             }
 
-            for (uint32_t i = 0; i < roomNodes.size(); ++i) if (roomNodes[i].axis == 0)
+            for (uint32_t i = 0; i < rooms.size(); ++i)
             {
-                roomChars[(roomNodes[i].y + roomNodes[i].height/2) * (width + 2) + roomNodes[i].x + roomNodes[i].width/2] = '0' + ((i/10)%10);
-                roomChars[(roomNodes[i].y + roomNodes[i].height/2) * (width + 2) + roomNodes[i].x + roomNodes[i].width/2 + 1] = '0' + (i%10);
+                roomChars[(rooms[i].y + rooms[i].height/2) * (width + 2) + rooms[i].x + rooms[i].width/2] = '0' + ((i/10)%10);
+                roomChars[(rooms[i].y + rooms[i].height/2) * (width + 2) + rooms[i].x + rooms[i].width/2 + 1] = '0' + (i%10);
             }
 
             std::cout << std::string(roomChars.data(), roomChars.size()) << std::endl;
         };
 
-        std::mt19937_64 prng;
-        prng.seed(seed);
+        // Partition space iteratively to create base layout of rooms. Continue until reached partitionedRoomCount
+        auto compareRoomsForSplit = [](const auto& left, const auto& right) {
+            return std::min(left.width, left.height) < std::min(right.width, right.height);
+        };
+        std::priority_queue<Room, std::vector<Room>, decltype(compareRoomsForSplit)> splitQueue(compareRoomsForSplit);
+        splitQueue.push(Room { .x = 0, .y = 0, .width = width, .height = height });
 
-        uint32_t leafNodes = 1;
-        while (!roomIndicesQueue.empty() && leafNodes < partitionedRoomCount)
+        while (!splitQueue.empty() && rooms.size() + splitQueue.size() < partitionedRoomCount)
         {
-            uint32_t index = roomIndicesQueue.top();
-            roomIndicesQueue.pop();
+            Room parent = splitQueue.top();
+            splitQueue.pop();
 
-            std::vector<bool> marked(roomNodes.size());
-            marked[index] = true;
-            // printRoomChars(marked);
+            if (std::max(parent.width, parent.height) < minSplitDimension)
+            {
+                rooms.push_back(parent);
+                continue;
+            }
 
-            if (std::max(roomNodes[index].width, roomNodes[index].height) < minSplitDimension)
+            Room child0 = parent;
+            Room child1 = parent;
+    
+            if (parent.width >= parent.height)
+            {
+                uint32_t split = (prng() % (parent.width - minSplitDimension)) + minSplitDimension / 2;
+                child0.width = split;
+                child1.x += split;
+                child1.width = parent.width - split;
+            }
+            else
+            {
+                uint32_t split = (prng() % (parent.height - minSplitDimension)) + minSplitDimension / 2;
+                child0.height = split;
+                child1.y += split;
+                child1.height = parent.height - split;
+            }
+
+            splitQueue.push(child0);
+            splitQueue.push(child1);
+        }
+
+        rooms.reserve(rooms.size() + splitQueue.size());
+        while (!splitQueue.empty())
+        {
+            rooms.push_back(splitQueue.top());
+            splitQueue.pop();
+        }
+
+        // Sort rooms by min/max coordinates along one axis at a time and find overlapping edges
+        std::vector<RoomEdge> roomEdges;
+        std::vector<RoomEdgeRecord> roomEdgeRecords;
+        std::vector<uint32_t> minIndices(rooms.size());
+        std::iota(minIndices.begin(), minIndices.end(), 0);
+        std::vector<uint32_t> maxIndices = minIndices;
+
+        // X direction
+        std::sort(minIndices.begin(), minIndices.end(), [&](const auto left, const auto right) {
+                return rooms[left].x < rooms[right].x;
+            });
+        std::sort(maxIndices.begin(), maxIndices.end(), [&](const auto left, const auto right) {
+                return rooms[left].x + rooms[left].width < rooms[right].x + rooms[right].width;
+            });
+        for (uint32_t mini = 0, maxi = 0; mini < minIndices.size() && maxi < maxIndices.size(); ++mini)
+        {
+            const auto& node0 = rooms[minIndices[mini]];
+            for (; maxi < maxIndices.size() && rooms[maxIndices[maxi]].x + rooms[maxIndices[maxi]].width < node0.x; ++maxi);
+            for (uint32_t tmaxi = maxi; tmaxi < maxIndices.size() && rooms[maxIndices[tmaxi]].x + rooms[maxIndices[tmaxi]].width == node0.x; ++tmaxi)
+            {
+                const auto& node1 = rooms[maxIndices[tmaxi]];
+                int overlap = static_cast<int>(std::min(node0.y + node0.height, node1.y + node1.height)) - static_cast<int>(std::max(node0.y, node1.y));
+                if (overlap >= static_cast<int>(minDoorOverlap))
+                {
+                    roomEdgeRecords.push_back({ { minIndices[mini], maxIndices[tmaxi] }, static_cast<uint32_t>(roomEdges.size()) });
+                    roomEdgeRecords.push_back({ { maxIndices[tmaxi], minIndices[mini] }, static_cast<uint32_t>(roomEdges.size()) });
+                    roomEdges.push_back(RoomEdge {
+                            .nodes = { minIndices[mini], maxIndices[tmaxi] },
+                            .overlap = overlap,
+                            .x = node0.x,
+                            .y = (std::max(node0.y, node1.y) + std::min(node0.y + node0.height, node1.y + node1.height)) / 2,
+                        });
+                }
+            }
+        }
+
+        // Y direction
+        std::sort(minIndices.begin(), minIndices.end(), [&](const auto left, const auto right) {
+                return rooms[left].y < rooms[right].y;
+            });
+        std::sort(maxIndices.begin(), maxIndices.end(), [&](const auto left, const auto right) {
+                return rooms[left].y + rooms[left].height < rooms[right].y + rooms[right].height;
+            });
+        for (uint32_t mini = 0, maxi = 0; mini < minIndices.size() && maxi < maxIndices.size(); ++mini)
+        {
+            const auto& node0 = rooms[minIndices[mini]];
+            for (; maxi < maxIndices.size() && rooms[maxIndices[maxi]].y + rooms[maxIndices[maxi]].height < node0.y; ++maxi);
+            for (uint32_t tmaxi = maxi; tmaxi < maxIndices.size() && rooms[maxIndices[tmaxi]].y + rooms[maxIndices[tmaxi]].height == node0.y; ++tmaxi)
+            {
+                const auto& node1 = rooms[maxIndices[tmaxi]];
+                int overlap = static_cast<int>(std::min(node0.x + node0.width, node1.x + node1.width)) - static_cast<int>(std::max(node0.x, node0.x));
+                if (overlap >= static_cast<int>(minDoorOverlap))
+                {
+                    roomEdgeRecords.push_back({ { minIndices[mini], maxIndices[tmaxi] }, static_cast<uint32_t>(roomEdges.size()) });
+                    roomEdgeRecords.push_back({ { maxIndices[tmaxi], minIndices[mini] }, static_cast<uint32_t>(roomEdges.size()) });
+                    roomEdges.push_back(RoomEdge {
+                            .nodes = { minIndices[mini], maxIndices[tmaxi] },
+                            .overlap = overlap,
+                            .x = (std::max(node0.x, node1.x) + std::min(node0.x + node0.width, node1.x + node1.width)) / 2,
+                            .y = node0.y,
+                        });
+                }
+            }
+        }
+
+        // Create indices into roomEdgeRecords for the start and end of the range of edge records per room
+        std::sort(roomEdgeRecords.begin(), roomEdgeRecords.end(), [](const auto& left, const auto& right) {
+                return left.nodes[0] < right.nodes[0];
+            });
+        std::vector<std::pair<uint32_t, uint32_t>> roomEdgeIndices(rooms.size());
+        for (uint32_t roomi = 0, edgei = 0; roomi < rooms.size(); ++roomi)
+        {
+            for (; edgei < roomEdgeRecords.size() && roomEdgeRecords[edgei].nodes[0] < roomi; ++edgei);
+            roomEdgeIndices[roomi].first = edgei;
+            for (; edgei < roomEdgeRecords.size() && roomEdgeRecords[edgei].nodes[0] == roomi; ++edgei);
+            roomEdgeIndices[roomi].second = edgei;
+        }
+
+        // Select rooms to add into the final layout by choosing a room randomly then iteratively selecting neighbors based on the smallest overlap > threshold that connects a room inside to one outside
+        const auto compareEdgeIndicesForSelection = [&](const auto left, const auto right) {
+            return roomEdges[left].overlap > roomEdges[right].overlap;
+        };
+        std::priority_queue<uint32_t, std::vector<uint32_t>, decltype(compareEdgeIndicesForSelection)> edgeIndexSelectionQueue(compareEdgeIndicesForSelection);
+
+        std::vector<uint32_t> roomSelectedIndices(rooms.size(), std::numeric_limits<uint32_t>::max());
+        std::vector<Room> selectedRooms;
+
+        const auto selectRoom = [&](const uint32_t index) {
+            for (uint32_t i = roomEdgeIndices[index].first; i < roomEdgeIndices[index].second; ++i)
+            {
+                edgeIndexSelectionQueue.push(roomEdgeRecords[i].index);
+            }
+            roomSelectedIndices[index] = selectedRooms.size();
+            selectedRooms.push_back(rooms[index]);
+        };
+
+        selectRoom(prng() % rooms.size());
+
+        std::vector<RoomEdge> selectedEdges;
+        std::vector<RoomEdgeRecord> selectedRoomEdgeRecords;
+
+        while (!edgeIndexSelectionQueue.empty() && selectedRooms.size() < targetRoomCount)
+        {
+            uint32_t edgeIndex = edgeIndexSelectionQueue.top();
+            edgeIndexSelectionQueue.pop();
+            const auto& roomEdge = roomEdges[edgeIndex];
+            if (roomSelectedIndices[roomEdge.nodes[0]] < selectedRooms.size() && roomSelectedIndices[roomEdge.nodes[1]] < selectedRooms.size())
             {
                 continue;
             }
 
-            roomNodes[index].children[0] = roomNodes.size();
-            roomNodes[index].children[1] = roomNodes.size() + 1;
-            roomNodes.push_back(roomNodes[index]);
-            roomNodes.push_back(roomNodes[index]);
-    
-            if (roomNodes[index].width > roomNodes[index].height)
-            {
-                roomNodes[index].axis = 1;
-                uint32_t split = (prng() % (roomNodes[index].width - minSplitDimension)) + minSplitDimension / 2;
-                roomNodes[roomNodes[index].children[0]].width = split;
-                roomNodes[roomNodes[index].children[1]].x += split;
-                roomNodes[roomNodes[index].children[1]].width = roomNodes[index].width - split;
-            }
-            else
-            {
-                roomNodes[index].axis = 2;
-                uint32_t split = (prng() % (roomNodes[index].height - minSplitDimension)) + minSplitDimension / 2;
-                roomNodes[roomNodes[index].children[0]].height = split;
-                roomNodes[roomNodes[index].children[1]].y += split;
-                roomNodes[roomNodes[index].children[1]].height = roomNodes[index].height - split;
-            }
+            selectRoom(roomSelectedIndices[roomEdge.nodes[0]] < selectedRooms.size() ? roomEdge.nodes[1] : roomEdge.nodes[0]);
 
-            roomIndicesQueue.push(roomNodes[index].children[0]);
-            roomIndicesQueue.push(roomNodes[index].children[1]);
-
-            ++leafNodes;
-
+            selectedRoomEdgeRecords.push_back({ { roomSelectedIndices[roomEdge.nodes[0]], roomSelectedIndices[roomEdge.nodes[1]] }, static_cast<uint32_t>(selectedEdges.size()) });
+            selectedRoomEdgeRecords.push_back({ { roomSelectedIndices[roomEdge.nodes[1]], roomSelectedIndices[roomEdge.nodes[0]] }, static_cast<uint32_t>(selectedEdges.size()) });
+            selectedEdges.push_back(roomEdge);
         }
 
+        // Condense to selected rooms and edges and recalculate edge indices based on only selected
+        rooms = std::move(selectedRooms);
+        roomEdges = std::move(selectedEdges);
+        roomEdgeRecords = std::move(selectedRoomEdgeRecords);
 
-        roomNodes.erase(std::remove_if(roomNodes.begin(), roomNodes.end(), [](const auto& roomNode) { return roomNode.axis > 0; }), roomNodes.end());
-        // printRoomChars();
-
-        struct RoomEdge
+        roomEdgeIndices.resize(rooms.size());
+        std::sort(roomEdgeRecords.begin(), roomEdgeRecords.end(), [](const auto& left, const auto& right) {
+                return left.nodes[0] < right.nodes[0];
+            });
+        for (uint32_t roomi = 0, edgei = 0; roomi < rooms.size(); ++roomi)
         {
-            uint32_t nodes[2];
-            int axis = 0;
-            int overlap = 0;
-        };
-        std::vector<RoomEdge> roomEdges;
+            for (; edgei < roomEdgeRecords.size() && roomEdgeRecords[edgei].nodes[0] < roomi; ++edgei);
+            roomEdgeIndices[roomi].first = edgei;
+            for (; edgei < roomEdgeRecords.size() && roomEdgeRecords[edgei].nodes[0] == roomi; ++edgei);
+            roomEdgeIndices[roomi].second = edgei;
+        }
 
-        std::vector<uint32_t> minIndices(roomNodes.size());
-        std::iota(minIndices.begin(), minIndices.end(), 0);
-        std::vector<uint32_t> maxIndices = minIndices;
-        std::sort(minIndices.begin(), minIndices.end(), [&](const auto left, const auto right) { return roomNodes[left].x < roomNodes[right].x; });
-        std::sort(maxIndices.begin(), maxIndices.end(), [&](const auto left, const auto right) { return roomNodes[left].x + roomNodes[left].width < roomNodes[right].x + roomNodes[right].width; });
-        for (uint32_t mini = 0, maxi = 0; mini < minIndices.size() && maxi < maxIndices.size(); ++mini)
+        // determine the degree of "interiority" by assigning terminal rooms a value of 1 and iteratively increasing for each neighbor
+        std::vector<uint32_t> interiority(rooms.size(), 0);
+        std::queue<std::pair<uint32_t, uint32_t>> interiorityProcessQueue; // first: index of room, second: score
+        for (uint32_t i = 0; i < rooms.size(); ++i)
         {
-            uint32_t val = roomNodes[minIndices[mini]].x;
-            for (; maxi < maxIndices.size() && roomNodes[maxIndices[maxi]].x + roomNodes[maxIndices[maxi]].width < val; ++maxi);
-            for (uint32_t tmaxi = maxi; tmaxi < maxIndices.size() && roomNodes[maxIndices[tmaxi]].x + roomNodes[maxIndices[tmaxi]].width == val; ++tmaxi)
+            if (roomEdgeIndices[i].second <= roomEdgeIndices[i].first + 1)
             {
-                int overlap = static_cast<int>(std::min(roomNodes[minIndices[mini]].y + roomNodes[minIndices[mini]].height,
-                                                        roomNodes[maxIndices[tmaxi]].y + roomNodes[maxIndices[tmaxi]].height))
-                    - static_cast<int>(std::max(roomNodes[minIndices[mini]].y, roomNodes[maxIndices[tmaxi]].y));
-                if (overlap >= static_cast<int>(minDoorOverlap))
+                interiorityProcessQueue.emplace(i, 1);
+            }
+        }
+
+        uint32_t maxInteriorityIndex = rooms.size();
+        while (!interiorityProcessQueue.empty())
+        {
+            auto [index, score] = interiorityProcessQueue.front();
+            interiorityProcessQueue.pop();
+            if (interiority[index] == 0)
+            {
+                maxInteriorityIndex = index;
+                interiority[index] = score;
+                for (uint32_t i = roomEdgeIndices[index].first; i < roomEdgeIndices[index].second; ++i)
                 {
-                    roomEdges.push_back(RoomEdge{ .nodes = { minIndices[mini], maxIndices[tmaxi] }, .axis = 1, .overlap = overlap });
+                    interiorityProcessQueue.emplace(roomEdgeRecords[i].nodes[1], score + 1);
                 }
             }
         }
 
-        std::sort(minIndices.begin(), minIndices.end(), [&](const auto left, const auto right) { return roomNodes[left].y < roomNodes[right].y; });
-        std::sort(maxIndices.begin(), maxIndices.end(), [&](const auto left, const auto right) { return roomNodes[left].y + roomNodes[left].height < roomNodes[right].y + roomNodes[right].height; });
-        for (uint32_t mini = 0, maxi = 0; mini < minIndices.size() && maxi < maxIndices.size(); ++mini)
-        {
-            uint32_t val = roomNodes[minIndices[mini]].y;
-            for (; maxi < maxIndices.size() && roomNodes[maxIndices[maxi]].y + roomNodes[maxIndices[maxi]].height < val; ++maxi);
-            for (uint32_t tmaxi = maxi; tmaxi < maxIndices.size() && roomNodes[maxIndices[tmaxi]].y + roomNodes[maxIndices[tmaxi]].height == val; ++tmaxi)
-            {
-                int overlap = static_cast<int>(std::min(roomNodes[minIndices[mini]].x + roomNodes[minIndices[mini]].width,
-                                                        roomNodes[maxIndices[tmaxi]].x + roomNodes[maxIndices[tmaxi]].width))
-                    - static_cast<int>(std::max(roomNodes[minIndices[mini]].x, roomNodes[maxIndices[tmaxi]].x));
-                if (overlap >= static_cast<int>(minDoorOverlap))
-                {
-                    roomEdges.push_back(RoomEdge{ .nodes = { minIndices[mini], maxIndices[tmaxi] }, .axis = 2, .overlap = overlap });
-                }
-            }
-        }
+        std::cout << "max interiority: " << maxInteriorityIndex << std::endl;
+        std::cout << "interiority: ";
+        for (auto i : interiority) std::cout << i << ", ";
+        std::cout << std::endl;
 
-        /* for (const auto& roomEdge : roomEdges)
-        {
-            std::cout << " nodes: " << roomEdge.nodes[0] << " " << roomEdge.nodes[1] << " axis: " << roomEdge.axis << " overlap: " << roomEdge.overlap << std::endl;
-        } */
 
-        std::vector<bool> selectedRoomNodes(roomNodes.size(), false);
-        selectedRoomNodes[prng() % roomNodes.size()] = true;
-        // printRoomChars(selectedRoomNodes);
-        std::vector<std::pair<uint32_t, uint32_t>> doors;
-        uint32_t countSelected = 1;
-        std::vector<uint32_t> edgeIndices(roomEdges.size());
-        std::iota(edgeIndices.begin(), edgeIndices.end(), 0);
-        while (countSelected < targetRoomCount)
-        {
-            std::sort(edgeIndices.begin(), edgeIndices.end(), [&](const auto left, const auto right) {
-                        bool boundary0 = selectedRoomNodes[roomEdges[left].nodes[0]] != selectedRoomNodes[roomEdges[left].nodes[1]];
-                        bool boundary1 = selectedRoomNodes[roomEdges[right].nodes[0]] != selectedRoomNodes[roomEdges[right].nodes[1]];
-                        return (boundary0 && !boundary1) || (boundary0 && boundary1 && roomEdges[left].overlap < roomEdges[right].overlap);
-                    });
-            /* for (const auto index : edgeIndices) if (const auto& roomEdge = roomEdges[index]; true)
-            {
-                std::cout << " nodes: " << roomEdge.nodes[0] << " " << roomEdge.nodes[1] << " axis: " << roomEdge.axis << " overlap: " << roomEdge.overlap << std::endl;
-            } */
-            const auto& roomEdge = roomEdges[edgeIndices.front()];
-            if (selectedRoomNodes[roomEdge.nodes[0]] == selectedRoomNodes[roomEdge.nodes[1]])
-            {
-                break;
-            }
-
-            const auto& node0 = roomNodes[roomEdge.nodes[0]];
-            const auto& node1 = roomNodes[roomEdge.nodes[1]];
-            if (roomEdge.axis == 1)
-            {
-                doors.emplace_back(node0.x, (std::max(node0.y, node1.y) + std::min(node0.y + node0.height, node1.y + node1.height)) / 2);
-            }
-            else
-            {
-                doors.emplace_back((std::max(node0.x, node1.x) + std::min(node0.x + node0.width, node1.x + node1.width)) / 2, node0.y);
-            }
-
-            selectedRoomNodes[roomEdge.nodes[0]] = true;
-            selectedRoomNodes[roomEdge.nodes[1]] = true;
-            ++countSelected;
-            // printRoomChars(selectedRoomNodes, doors);
-        }
-
-        for (uint32_t i = 0, j = 0; i < roomNodes.size(); ++i)
-        {
-            if (selectedRoomNodes[i])
-            {
-                roomNodes[j++] = roomNodes[i];
-            }
-        }
-        roomNodes.resize(countSelected);
         // std::cout << "FINAL:" << std::endl;
-        printRoomChars({}, doors);
+        printRoomChars({}, roomEdges);
     }
 
     void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app) override
