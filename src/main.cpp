@@ -87,6 +87,453 @@ static std::vector<uint32_t> getIndexedTextures(eng::ResourceLoaderInterface& re
     return values;
 }
 
+struct Dungeon
+{
+    struct Room
+    {
+        uint32_t x, y;
+        uint32_t width, height;
+        struct { uint32_t start; uint32_t end; } portalRecordsRange;
+    };
+
+    struct Portal
+    {
+        uint32_t rooms[2];
+        uint32_t x, y;
+    };
+
+    struct RoomPortalRecord
+    {
+        uint32_t rooms[2];
+        uint32_t portal;
+    };
+
+    std::vector<Room> rooms;
+    std::vector<Portal> portals;
+    std::vector<RoomPortalRecord> roomPortalRecords;
+
+    struct GenerationParams
+    {
+        uint64_t seed;
+        uint32_t width, height;
+        uint32_t partitionedRoomCount;
+        uint32_t targetRoomCount;
+        uint32_t minSplitDimension;
+        uint32_t minPortalOverlap;
+    };
+
+    static Dungeon generate(const GenerationParams& params)
+    {
+        std::mt19937_64 prng;
+        prng.seed(params.seed);
+
+        // Partition space iteratively to create base layout of rooms. Continue until reached partitionedRoomCount
+        auto compareRoomsForSplit = [](const auto& left, const auto& right) {
+            return std::min(left.width, left.height) < std::min(right.width, right.height);
+        };
+        std::priority_queue<Room, std::vector<Room>, decltype(compareRoomsForSplit)> splitQueue(compareRoomsForSplit);
+        splitQueue.push(Room { .x = 0, .y = 0, .width = params.width, .height = params.height });
+        std::vector<Room> rooms;
+
+        while (!splitQueue.empty() && rooms.size() + splitQueue.size() < params.partitionedRoomCount)
+        {
+            Room parent = splitQueue.top();
+            splitQueue.pop();
+
+            if (std::max(parent.width, parent.height) < params.minSplitDimension)
+            {
+                rooms.push_back(parent);
+                continue;
+            }
+
+            Room child0 = parent;
+            Room child1 = parent;
+    
+            if (parent.width >= parent.height)
+            {
+                uint32_t split = (prng() % (parent.width - params.minSplitDimension)) + params.minSplitDimension / 2;
+                child0.width = split;
+                child1.x += split;
+                child1.width = parent.width - split;
+            }
+            else
+            {
+                uint32_t split = (prng() % (parent.height - params.minSplitDimension)) + params.minSplitDimension / 2;
+                child0.height = split;
+                child1.y += split;
+                child1.height = parent.height - split;
+            }
+
+            splitQueue.push(child0);
+            splitQueue.push(child1);
+        }
+
+        rooms.reserve(rooms.size() + splitQueue.size());
+        while (!splitQueue.empty())
+        {
+            rooms.push_back(splitQueue.top());
+            splitQueue.pop();
+        }
+
+        // Sort rooms by min/max coordinates along one axis at a time and find overlapping portals
+        std::vector<Portal> portals;
+        std::vector<RoomPortalRecord> roomPortalRecords;
+        std::vector<int> portalOverlap;
+
+        std::vector<uint32_t> minIndices(rooms.size());
+        std::iota(minIndices.begin(), minIndices.end(), 0);
+        std::vector<uint32_t> maxIndices = minIndices;
+
+        // X direction
+        std::sort(minIndices.begin(), minIndices.end(), [&](const auto left, const auto right) {
+                return rooms[left].x < rooms[right].x;
+            });
+        std::sort(maxIndices.begin(), maxIndices.end(), [&](const auto left, const auto right) {
+                return rooms[left].x + rooms[left].width < rooms[right].x + rooms[right].width;
+            });
+        for (uint32_t mini = 0, maxi = 0; mini < minIndices.size() && maxi < maxIndices.size(); ++mini)
+        {
+            const auto& room0 = rooms[minIndices[mini]];
+            for (; maxi < maxIndices.size() && rooms[maxIndices[maxi]].x + rooms[maxIndices[maxi]].width < room0.x; ++maxi);
+            for (uint32_t tmaxi = maxi; tmaxi < maxIndices.size() && rooms[maxIndices[tmaxi]].x + rooms[maxIndices[tmaxi]].width == room0.x; ++tmaxi)
+            {
+                const auto& room1 = rooms[maxIndices[tmaxi]];
+                int overlap = static_cast<int>(std::min(room0.y + room0.height, room1.y + room1.height)) - static_cast<int>(std::max(room0.y, room1.y));
+                if (overlap >= static_cast<int>(params.minPortalOverlap))
+                {
+                    roomPortalRecords.push_back({ { minIndices[mini], maxIndices[tmaxi] }, static_cast<uint32_t>(portals.size()) });
+                    roomPortalRecords.push_back({ { maxIndices[tmaxi], minIndices[mini] }, static_cast<uint32_t>(portals.size()) });
+                    portals.push_back(Portal {
+                            .rooms = { minIndices[mini], maxIndices[tmaxi] },
+                            .x = room0.x,
+                            .y = (std::max(room0.y, room1.y) + std::min(room0.y + room0.height, room1.y + room1.height)) / 2,
+                        });
+                    portalOverlap.push_back(overlap);
+                }
+            }
+        }
+
+        // Y direction
+        std::sort(minIndices.begin(), minIndices.end(), [&](const auto left, const auto right) {
+                return rooms[left].y < rooms[right].y;
+            });
+        std::sort(maxIndices.begin(), maxIndices.end(), [&](const auto left, const auto right) {
+                return rooms[left].y + rooms[left].height < rooms[right].y + rooms[right].height;
+            });
+        for (uint32_t mini = 0, maxi = 0; mini < minIndices.size() && maxi < maxIndices.size(); ++mini)
+        {
+            const auto& room0 = rooms[minIndices[mini]];
+            for (; maxi < maxIndices.size() && rooms[maxIndices[maxi]].y + rooms[maxIndices[maxi]].height < room0.y; ++maxi);
+            for (uint32_t tmaxi = maxi; tmaxi < maxIndices.size() && rooms[maxIndices[tmaxi]].y + rooms[maxIndices[tmaxi]].height == room0.y; ++tmaxi)
+            {
+                const auto& room1 = rooms[maxIndices[tmaxi]];
+                int overlap = static_cast<int>(std::min(room0.x + room0.width, room1.x + room1.width)) - static_cast<int>(std::max(room0.x, room1.x));
+                if (overlap >= static_cast<int>(params.minPortalOverlap))
+                {
+                    roomPortalRecords.push_back({ { minIndices[mini], maxIndices[tmaxi] }, static_cast<uint32_t>(portals.size()) });
+                    roomPortalRecords.push_back({ { maxIndices[tmaxi], minIndices[mini] }, static_cast<uint32_t>(portals.size()) });
+                    portals.push_back(Portal {
+                            .rooms = { minIndices[mini], maxIndices[tmaxi] },
+                            .x = (std::max(room0.x, room1.x) + std::min(room0.x + room0.width, room1.x + room1.width)) / 2,
+                            .y = room0.y,
+                        });
+                    portalOverlap.push_back(overlap);
+                }
+            }
+        }
+
+        // Create indices into portalRecords for the start and end of the range of portal records per room
+        std::sort(roomPortalRecords.begin(), roomPortalRecords.end(), [](const auto& left, const auto& right) {
+                return left.rooms[0] < right.rooms[0];
+            });
+        for (uint32_t roomi = 0, portali = 0; roomi < rooms.size(); ++roomi)
+        {
+            for (; portali < roomPortalRecords.size() && roomPortalRecords[portali].rooms[0] < roomi; ++portali);
+            rooms[roomi].portalRecordsRange.start = portali;
+            for (; portali < roomPortalRecords.size() && roomPortalRecords[portali].rooms[0] == roomi; ++portali);
+            rooms[roomi].portalRecordsRange.end = portali;
+        }
+
+        // Select rooms to add into the final layout by choosing a room randomly then iteratively selecting neighbors based on the smallest overlap > threshold that connects a room inside to one outside
+        const auto comparePortalIndicesForSelection = [&](const auto left, const auto right) {
+            return portalOverlap[left] > portalOverlap[right];
+        };
+        std::priority_queue<uint32_t, std::vector<uint32_t>, decltype(comparePortalIndicesForSelection)> portalIndexSelectionQueue(comparePortalIndicesForSelection);
+
+        std::vector<uint32_t> roomSelectedIndices(rooms.size(), std::numeric_limits<uint32_t>::max());
+        std::vector<Room> selectedRooms;
+
+        const auto selectRoom = [&](const uint32_t index) {
+            for (uint32_t i = rooms[index].portalRecordsRange.start; i < rooms[index].portalRecordsRange.end; ++i)
+            {
+                portalIndexSelectionQueue.push(roomPortalRecords[i].portal);
+            }
+            roomSelectedIndices[index] = selectedRooms.size();
+            selectedRooms.push_back(rooms[index]);
+        };
+
+        selectRoom(prng() % rooms.size());
+
+        std::vector<Portal> selectedPortals;
+        std::vector<RoomPortalRecord> selectedPortalRecords;
+
+        while (!portalIndexSelectionQueue.empty() && selectedRooms.size() < params.targetRoomCount)
+        {
+            uint32_t portalIndex = portalIndexSelectionQueue.top();
+            portalIndexSelectionQueue.pop();
+            const auto& portal = portals[portalIndex];
+            if ((roomSelectedIndices[portal.rooms[0]] < selectedRooms.size()) == (roomSelectedIndices[portal.rooms[1]] < selectedRooms.size()))
+            {
+                continue;
+            }
+
+            selectRoom(roomSelectedIndices[portal.rooms[0]] < selectedRooms.size() ? portal.rooms[1] : portal.rooms[0]);
+
+            selectedPortalRecords.push_back({ { roomSelectedIndices[portal.rooms[0]], roomSelectedIndices[portal.rooms[1]] }, static_cast<uint32_t>(selectedPortals.size()) });
+            selectedPortalRecords.push_back({ { roomSelectedIndices[portal.rooms[1]], roomSelectedIndices[portal.rooms[0]] }, static_cast<uint32_t>(selectedPortals.size()) });
+            selectedPortals.push_back(Portal {
+                        .rooms = { roomSelectedIndices[portal.rooms[0]], roomSelectedIndices[portal.rooms[1]] },
+                        .x = portal.x,
+                        .y = portal.y,
+                    });
+        }
+
+        // Condense to selected rooms and portals and recalculate portal indices based on only selected
+        rooms = std::move(selectedRooms);
+        portals = std::move(selectedPortals);
+        roomPortalRecords = std::move(selectedPortalRecords);
+
+        std::sort(roomPortalRecords.begin(), roomPortalRecords.end(), [](const auto& left, const auto& right) {
+                return left.rooms[0] < right.rooms[0];
+            });
+        for (uint32_t roomi = 0, portali = 0; roomi < rooms.size(); ++roomi)
+        {
+            for (; portali < roomPortalRecords.size() && roomPortalRecords[portali].rooms[0] < roomi; ++portali);
+            rooms[roomi].portalRecordsRange.start = portali;
+            for (; portali < roomPortalRecords.size() && roomPortalRecords[portali].rooms[0] == roomi; ++portali);
+            rooms[roomi].portalRecordsRange.end = portali;
+        }
+
+        /* // determine the degree of "interiority" by assigning terminal rooms a value of 1 and iteratively increasing for each neighbor
+        std::vector<uint32_t> interiority(rooms.size(), 0);
+        std::queue<std::pair<uint32_t, uint32_t>> interiorityProcessQueue; // first: index of room, second: score
+        for (uint32_t i = 0; i < rooms.size(); ++i)
+        {
+            if (rooms[i].portalRecordsRange.end <= rooms[i].portalRecordsRange.start + 1)
+            {
+                interiorityProcessQueue.emplace(i, 1);
+            }
+        }
+
+        uint32_t maxInteriorityIndex = rooms.size();
+        while (!interiorityProcessQueue.empty())
+        {
+            auto [index, score] = interiorityProcessQueue.front();
+            interiorityProcessQueue.pop();
+            if (interiority[index] == 0)
+            {
+                maxInteriorityIndex = index;
+                interiority[index] = score;
+                for (uint32_t i = rooms[index].portalRecordsRange.start; i < rooms[index].portalRecordsRange.end; ++i)
+                {
+                    interiorityProcessQueue.emplace(roomPortalRecords[i].rooms[1], score + 1);
+                }
+            }
+        }
+
+        std::cout << "max interiority: " << maxInteriorityIndex << std::endl;
+        std::cout << "interiority: ";
+        for (auto i : interiority) std::cout << i << ", ";
+        std::cout << std::endl; */
+
+        return Dungeon {
+            .rooms = std::move(rooms),
+            .portals = std::move(portals),
+            .roomPortalRecords = std::move(roomPortalRecords),
+        };
+    }
+
+    void print(const std::vector<bool>& marked = {})
+    {
+        uint32_t xmin = std::numeric_limits<uint32_t>::max(), xmax = 0,
+                 ymin = xmin, ymax = xmax;
+        for (const auto& room : rooms)
+        {
+            xmin = std::min(xmin, room.x);
+            xmax = std::max(xmax, room.x + room.width);
+            ymin = std::min(ymin, room.y);
+            ymax = std::max(ymax, room.y + room.height);
+        }
+        uint32_t width = xmax - xmin;
+        uint32_t height = ymax - ymin;
+
+        std::vector<char> roomChars((height + 1) * (width + 2), ' ');
+        for (uint32_t i = 0; i <= height; ++i)
+        {
+            roomChars[i * (width + 2) + width + 1] = '\n';
+        }
+
+        if (marked.size() == rooms.size()) for(uint32_t index = 0; index < rooms.size(); ++index) if (marked[index])
+        {
+            for (uint32_t i = 0; i <= rooms[index].width; ++i)
+            {
+                for (uint32_t j = 0; j <= rooms[index].height; ++j)
+                {
+                    roomChars[(rooms[index].y - ymin + j) * (width + 2) + rooms[index].x - xmin + i] = '/';
+                }
+            }
+        }
+
+        for (const auto& room : rooms)
+        {
+            for (uint32_t i = 0; i <= room.width; ++i)
+            {
+                roomChars[(room.y - ymin) * (width + 2) + room.x - xmin + i] = 'X';
+                roomChars[(room.y - ymin + room.height) * (width + 2) + room.x - xmin + i] = 'X';
+            }
+            for (uint32_t i = 0; i <= room.height; ++i)
+            {
+                roomChars[(room.y - ymin + i) * (width + 2) + room.x - xmin] = 'X';
+                roomChars[(room.y - ymin + i) * (width + 2) + room.x - xmin + room.width] = 'X';
+            }
+        }
+
+        for (const auto& portal : portals)
+        {
+            roomChars[(portal.y - ymin) * (width + 2) + portal.x - xmin] = '_';
+        }
+
+        int digits = std::ceil(std::log10(rooms.size() - 1));
+        for (uint32_t i = 0; i < rooms.size(); ++i)
+        {
+            int divisor = 1;
+            for (int j = 0; j < digits; ++j)
+            {
+                roomChars[(rooms[i].y - ymin + rooms[i].height/2) * (width + 2) + rooms[i].x - xmin + rooms[i].width/2 + digits/2 - j] = '0' + ((i/divisor)%10);
+                divisor *= 10;
+            }
+        }
+
+        std::cout << std::string(roomChars.data(), roomChars.size()) << std::endl;
+    }
+
+    eng::GeometryDescription createGeometry(const float wallHeight)
+    {
+        eng::GeometryDescription geometry;
+
+        struct WallNode
+        {
+            uint32_t bounds[2];
+            uint32_t children[2];
+            int wall;
+            bool split = false;
+        };
+        std::vector<WallNode> wallNodes;
+
+        constexpr glm::vec3 wallNormals[] {
+            { 0, 0, -1 }, { 1, 0, 0 }, { 0, 0, 1 }, { -1, 0, 0 },
+        };
+
+        for (const auto& room : rooms)
+        {
+            // Floor
+            geometry.indices.push_back(geometry.positions.size());
+            geometry.indices.push_back(geometry.positions.size() + 1);
+            geometry.indices.push_back(geometry.positions.size() + 2);
+            geometry.indices.push_back(geometry.positions.size() + 2);
+            geometry.indices.push_back(geometry.positions.size() + 1);
+            geometry.indices.push_back(geometry.positions.size() + 3);
+
+            geometry.positions.push_back(glm::vec3(room.x, 0, room.y));
+            geometry.texCoords.push_back(glm::vec2(room.x, room.y));
+            geometry.normals.push_back(glm::vec3(0, 1, 0));
+
+            geometry.positions.push_back(glm::vec3(room.x, 0, room.y + room.height));
+            geometry.texCoords.push_back(glm::vec2(room.x, room.y + room.height));
+            geometry.normals.push_back(glm::vec3(0, 1, 0));
+
+            geometry.positions.push_back(glm::vec3(room.x + room.width, 0, room.y));
+            geometry.texCoords.push_back(glm::vec2(room.x + room.width, room.y));
+            geometry.normals.push_back(glm::vec3(0, 1, 0));
+
+            geometry.positions.push_back(glm::vec3(room.x + room.width, 0, room.y + room.height));
+            geometry.texCoords.push_back(glm::vec2(room.x + room.width, room.y + room.height));
+            geometry.normals.push_back(glm::vec3(0, 1, 0));
+
+            // Walls
+            wallNodes.clear();
+            wallNodes.push_back({ .bounds = { room.x, room.x + room.width}, .wall = 0 });
+            wallNodes.push_back({ .bounds = { room.y, room.y + room.height }, .wall = 1 });
+            wallNodes.push_back({ .bounds = { room.x, room.x + room.width }, .wall = 2 });
+            wallNodes.push_back({ .bounds = { room.y, room.y + room.height }, .wall = 3 });
+            for (auto portalRecordIndex = room.portalRecordsRange.start; portalRecordIndex < room.portalRecordsRange.end; ++portalRecordIndex)
+            {
+                const auto& portal = portals[roomPortalRecords[portalRecordIndex].portal];
+                uint32_t index = 0;
+                if (portal.x == room.x) index = 1;
+                else if (portal.y == room.y + room.height) index = 2;
+                else if (portal.x == room.x + room.width) index = 3;
+                uint32_t value = (index & 1) ? portal.y : portal.x;
+                while (wallNodes[index].split)
+                {
+                    index = (value > wallNodes[wallNodes[index].children[0]].bounds[1]) ?
+                        wallNodes[index].children[1] : wallNodes[index].children[0];
+                }
+                wallNodes[index].split = true;
+                wallNodes[index].children[0] = wallNodes.size();
+                wallNodes[index].children[1] = wallNodes.size() + 1;
+                wallNodes.push_back({
+                        .bounds = { wallNodes[index].bounds[0], value },
+                        .wall = wallNodes[index].wall,
+                    });
+                wallNodes.push_back({
+                        .bounds = { value + 1, wallNodes[index].bounds[1] },
+                        .wall = wallNodes[index].wall,
+                    });
+            }
+
+            wallNodes.erase(std::remove_if(wallNodes.begin(), wallNodes.end(), [](const auto& node) {
+                            return node.split;
+                        }), wallNodes.end());
+            for (const auto& node : wallNodes)
+            {
+                glm::vec3 points[2] = {
+                    (node.wall & 2) == 0 ? glm::vec3(room.x, 0, room.y)
+                        : glm::vec3(room.x + room.width, 0, room.y + room.height),
+                };
+                points[1] = points[0];
+                points[0][2 * (node.wall & 1)] = node.bounds[0];
+                points[1][2 * (node.wall & 1)] = node.bounds[1];
+
+                geometry.indices.push_back(geometry.positions.size());
+                geometry.indices.push_back(geometry.positions.size() + 1);
+                geometry.indices.push_back(geometry.positions.size() + 2);
+                geometry.indices.push_back(geometry.positions.size() + 2);
+                geometry.indices.push_back(geometry.positions.size() + 1);
+                geometry.indices.push_back(geometry.positions.size() + 3);
+
+                geometry.positions.push_back(points[0] + wallNormals[node.wall] * 0.1f);
+                geometry.texCoords.push_back(glm::vec2(node.bounds[0], 0));
+                geometry.normals.push_back(wallNormals[node.wall]);
+
+                geometry.positions.push_back(points[1] + wallNormals[node.wall] * 0.1f);
+                geometry.texCoords.push_back(glm::vec2(node.bounds[1], 0));
+                geometry.normals.push_back(wallNormals[node.wall]);
+
+                geometry.positions.push_back(glm::vec3(points[0].x, wallHeight, points[0].z) + wallNormals[node.wall] * 0.1f);
+                geometry.texCoords.push_back(glm::vec2(node.bounds[0], wallHeight));
+                geometry.normals.push_back(wallNormals[node.wall]);
+
+                geometry.positions.push_back(glm::vec3(points[1].x, wallHeight, points[1].z) + wallNormals[node.wall] * 0.1f);
+                geometry.texCoords.push_back(glm::vec2(node.bounds[1], wallHeight));
+                geometry.normals.push_back(wallNormals[node.wall]);
+            }
+        }
+
+        return geometry;
+    }
+};
+
 struct GameLogic final : eng::GameLogicInterface
 {
     struct {
@@ -100,11 +547,13 @@ struct GameLogic final : eng::GameLogicInterface
     } textures;
 
     std::vector<std::pair<uint32_t, uint32_t>> skeletonResources;
-    std::vector<std::pair<uint32_t, uint32_t>> mapResourcePairs;
+    // std::vector<std::pair<uint32_t, uint32_t>> mapResourcePairs;
     std::map<SpriteDirection, uint32_t> enemyTextures;
-    wmap::Map map;
+    // wmap::Map map;
 
     std::map<SpriteDirection, std::vector<uint32_t>> plasmaTextures;
+
+    uint32_t dungeonGeometryResource;
 
     glm::vec3 cameraPosition = { 0, 2, 0 };
     float playerAngle = 0;
@@ -199,300 +648,10 @@ struct GameLogic final : eng::GameLogicInterface
         playerCharacter->SetLinearVelocity(glm_to_jph(movementSpeed * direction + glm::vec3(0, velocity.y, 0)));
     }
 
-    void generateRooms(const uint64_t seed = 0, const uint32_t width = 50, const uint32_t height = 35, const uint32_t partitionedRoomCount = 20, const uint32_t targetRoomCount = 8, const uint32_t minSplitDimension = 4, const uint32_t minDoorOverlap = 2)
-    {
-        struct Room {
-            uint32_t x, y;
-            uint32_t width, height;
-        };
-
-        struct RoomEdge
-        {
-            uint32_t nodes[2];
-            int overlap = 0;
-            uint32_t x, y;
-        };
-
-        struct RoomEdgeRecord
-        {
-            uint32_t nodes[2];
-            uint32_t index;
-        };
-
-        std::mt19937_64 prng;
-        prng.seed(seed);
-
-        std::vector<Room> rooms;
-
-        auto printRoomChars = [&](const std::vector<bool>& marked = {}, const std::vector<RoomEdge>& doors = {}) {
-            std::vector<char> roomChars((height + 1) * (width + 2), ' ');
-
-            for (uint32_t i = 0; i <= height; ++i)
-            {
-                roomChars[i * (width + 2) + width + 1] = '\n';
-            }
-
-            if (marked.size() == rooms.size()) for(uint32_t index = 0; index < rooms.size(); ++index) if (marked[index])
-            {
-                for (uint32_t i = 0; i <= rooms[index].width; ++i)
-                {
-                    for (uint32_t j = 0; j <= rooms[index].height; ++j)
-                    {
-                        roomChars[(rooms[index].y + j) * (width + 2) + rooms[index].x + i] = '/';
-                    }
-                }
-            }
-
-            for (const auto& room : rooms)
-            {
-                for (uint32_t i = 0; i <= room.width; ++i)
-                {
-                    roomChars[room.y * (width + 2) + room.x + i] = 'X';
-                    roomChars[(room.y + room.height) * (width + 2) + room.x + i] = 'X';
-                }
-                for (uint32_t i = 0; i <= room.height; ++i)
-                {
-                    roomChars[(room.y + i) * (width + 2) + room.x] = 'X';
-                    roomChars[(room.y + i) * (width + 2) + room.x + room.width] = 'X';
-                }
-            }
-
-            for (const auto& edge : doors)
-            {
-                roomChars[edge.y * (width + 2) + edge.x] = '_';
-            }
-
-            for (uint32_t i = 0; i < rooms.size(); ++i)
-            {
-                roomChars[(rooms[i].y + rooms[i].height/2) * (width + 2) + rooms[i].x + rooms[i].width/2] = '0' + ((i/10)%10);
-                roomChars[(rooms[i].y + rooms[i].height/2) * (width + 2) + rooms[i].x + rooms[i].width/2 + 1] = '0' + (i%10);
-            }
-
-            std::cout << std::string(roomChars.data(), roomChars.size()) << std::endl;
-        };
-
-        // Partition space iteratively to create base layout of rooms. Continue until reached partitionedRoomCount
-        auto compareRoomsForSplit = [](const auto& left, const auto& right) {
-            return std::min(left.width, left.height) < std::min(right.width, right.height);
-        };
-        std::priority_queue<Room, std::vector<Room>, decltype(compareRoomsForSplit)> splitQueue(compareRoomsForSplit);
-        splitQueue.push(Room { .x = 0, .y = 0, .width = width, .height = height });
-
-        while (!splitQueue.empty() && rooms.size() + splitQueue.size() < partitionedRoomCount)
-        {
-            Room parent = splitQueue.top();
-            splitQueue.pop();
-
-            if (std::max(parent.width, parent.height) < minSplitDimension)
-            {
-                rooms.push_back(parent);
-                continue;
-            }
-
-            Room child0 = parent;
-            Room child1 = parent;
-    
-            if (parent.width >= parent.height)
-            {
-                uint32_t split = (prng() % (parent.width - minSplitDimension)) + minSplitDimension / 2;
-                child0.width = split;
-                child1.x += split;
-                child1.width = parent.width - split;
-            }
-            else
-            {
-                uint32_t split = (prng() % (parent.height - minSplitDimension)) + minSplitDimension / 2;
-                child0.height = split;
-                child1.y += split;
-                child1.height = parent.height - split;
-            }
-
-            splitQueue.push(child0);
-            splitQueue.push(child1);
-        }
-
-        rooms.reserve(rooms.size() + splitQueue.size());
-        while (!splitQueue.empty())
-        {
-            rooms.push_back(splitQueue.top());
-            splitQueue.pop();
-        }
-
-        // Sort rooms by min/max coordinates along one axis at a time and find overlapping edges
-        std::vector<RoomEdge> roomEdges;
-        std::vector<RoomEdgeRecord> roomEdgeRecords;
-        std::vector<uint32_t> minIndices(rooms.size());
-        std::iota(minIndices.begin(), minIndices.end(), 0);
-        std::vector<uint32_t> maxIndices = minIndices;
-
-        // X direction
-        std::sort(minIndices.begin(), minIndices.end(), [&](const auto left, const auto right) {
-                return rooms[left].x < rooms[right].x;
-            });
-        std::sort(maxIndices.begin(), maxIndices.end(), [&](const auto left, const auto right) {
-                return rooms[left].x + rooms[left].width < rooms[right].x + rooms[right].width;
-            });
-        for (uint32_t mini = 0, maxi = 0; mini < minIndices.size() && maxi < maxIndices.size(); ++mini)
-        {
-            const auto& node0 = rooms[minIndices[mini]];
-            for (; maxi < maxIndices.size() && rooms[maxIndices[maxi]].x + rooms[maxIndices[maxi]].width < node0.x; ++maxi);
-            for (uint32_t tmaxi = maxi; tmaxi < maxIndices.size() && rooms[maxIndices[tmaxi]].x + rooms[maxIndices[tmaxi]].width == node0.x; ++tmaxi)
-            {
-                const auto& node1 = rooms[maxIndices[tmaxi]];
-                int overlap = static_cast<int>(std::min(node0.y + node0.height, node1.y + node1.height)) - static_cast<int>(std::max(node0.y, node1.y));
-                if (overlap >= static_cast<int>(minDoorOverlap))
-                {
-                    roomEdgeRecords.push_back({ { minIndices[mini], maxIndices[tmaxi] }, static_cast<uint32_t>(roomEdges.size()) });
-                    roomEdgeRecords.push_back({ { maxIndices[tmaxi], minIndices[mini] }, static_cast<uint32_t>(roomEdges.size()) });
-                    roomEdges.push_back(RoomEdge {
-                            .nodes = { minIndices[mini], maxIndices[tmaxi] },
-                            .overlap = overlap,
-                            .x = node0.x,
-                            .y = (std::max(node0.y, node1.y) + std::min(node0.y + node0.height, node1.y + node1.height)) / 2,
-                        });
-                }
-            }
-        }
-
-        // Y direction
-        std::sort(minIndices.begin(), minIndices.end(), [&](const auto left, const auto right) {
-                return rooms[left].y < rooms[right].y;
-            });
-        std::sort(maxIndices.begin(), maxIndices.end(), [&](const auto left, const auto right) {
-                return rooms[left].y + rooms[left].height < rooms[right].y + rooms[right].height;
-            });
-        for (uint32_t mini = 0, maxi = 0; mini < minIndices.size() && maxi < maxIndices.size(); ++mini)
-        {
-            const auto& node0 = rooms[minIndices[mini]];
-            for (; maxi < maxIndices.size() && rooms[maxIndices[maxi]].y + rooms[maxIndices[maxi]].height < node0.y; ++maxi);
-            for (uint32_t tmaxi = maxi; tmaxi < maxIndices.size() && rooms[maxIndices[tmaxi]].y + rooms[maxIndices[tmaxi]].height == node0.y; ++tmaxi)
-            {
-                const auto& node1 = rooms[maxIndices[tmaxi]];
-                int overlap = static_cast<int>(std::min(node0.x + node0.width, node1.x + node1.width)) - static_cast<int>(std::max(node0.x, node0.x));
-                if (overlap >= static_cast<int>(minDoorOverlap))
-                {
-                    roomEdgeRecords.push_back({ { minIndices[mini], maxIndices[tmaxi] }, static_cast<uint32_t>(roomEdges.size()) });
-                    roomEdgeRecords.push_back({ { maxIndices[tmaxi], minIndices[mini] }, static_cast<uint32_t>(roomEdges.size()) });
-                    roomEdges.push_back(RoomEdge {
-                            .nodes = { minIndices[mini], maxIndices[tmaxi] },
-                            .overlap = overlap,
-                            .x = (std::max(node0.x, node1.x) + std::min(node0.x + node0.width, node1.x + node1.width)) / 2,
-                            .y = node0.y,
-                        });
-                }
-            }
-        }
-
-        // Create indices into roomEdgeRecords for the start and end of the range of edge records per room
-        std::sort(roomEdgeRecords.begin(), roomEdgeRecords.end(), [](const auto& left, const auto& right) {
-                return left.nodes[0] < right.nodes[0];
-            });
-        std::vector<std::pair<uint32_t, uint32_t>> roomEdgeIndices(rooms.size());
-        for (uint32_t roomi = 0, edgei = 0; roomi < rooms.size(); ++roomi)
-        {
-            for (; edgei < roomEdgeRecords.size() && roomEdgeRecords[edgei].nodes[0] < roomi; ++edgei);
-            roomEdgeIndices[roomi].first = edgei;
-            for (; edgei < roomEdgeRecords.size() && roomEdgeRecords[edgei].nodes[0] == roomi; ++edgei);
-            roomEdgeIndices[roomi].second = edgei;
-        }
-
-        // Select rooms to add into the final layout by choosing a room randomly then iteratively selecting neighbors based on the smallest overlap > threshold that connects a room inside to one outside
-        const auto compareEdgeIndicesForSelection = [&](const auto left, const auto right) {
-            return roomEdges[left].overlap > roomEdges[right].overlap;
-        };
-        std::priority_queue<uint32_t, std::vector<uint32_t>, decltype(compareEdgeIndicesForSelection)> edgeIndexSelectionQueue(compareEdgeIndicesForSelection);
-
-        std::vector<uint32_t> roomSelectedIndices(rooms.size(), std::numeric_limits<uint32_t>::max());
-        std::vector<Room> selectedRooms;
-
-        const auto selectRoom = [&](const uint32_t index) {
-            for (uint32_t i = roomEdgeIndices[index].first; i < roomEdgeIndices[index].second; ++i)
-            {
-                edgeIndexSelectionQueue.push(roomEdgeRecords[i].index);
-            }
-            roomSelectedIndices[index] = selectedRooms.size();
-            selectedRooms.push_back(rooms[index]);
-        };
-
-        selectRoom(prng() % rooms.size());
-
-        std::vector<RoomEdge> selectedEdges;
-        std::vector<RoomEdgeRecord> selectedRoomEdgeRecords;
-
-        while (!edgeIndexSelectionQueue.empty() && selectedRooms.size() < targetRoomCount)
-        {
-            uint32_t edgeIndex = edgeIndexSelectionQueue.top();
-            edgeIndexSelectionQueue.pop();
-            const auto& roomEdge = roomEdges[edgeIndex];
-            if (roomSelectedIndices[roomEdge.nodes[0]] < selectedRooms.size() && roomSelectedIndices[roomEdge.nodes[1]] < selectedRooms.size())
-            {
-                continue;
-            }
-
-            selectRoom(roomSelectedIndices[roomEdge.nodes[0]] < selectedRooms.size() ? roomEdge.nodes[1] : roomEdge.nodes[0]);
-
-            selectedRoomEdgeRecords.push_back({ { roomSelectedIndices[roomEdge.nodes[0]], roomSelectedIndices[roomEdge.nodes[1]] }, static_cast<uint32_t>(selectedEdges.size()) });
-            selectedRoomEdgeRecords.push_back({ { roomSelectedIndices[roomEdge.nodes[1]], roomSelectedIndices[roomEdge.nodes[0]] }, static_cast<uint32_t>(selectedEdges.size()) });
-            selectedEdges.push_back(roomEdge);
-        }
-
-        // Condense to selected rooms and edges and recalculate edge indices based on only selected
-        rooms = std::move(selectedRooms);
-        roomEdges = std::move(selectedEdges);
-        roomEdgeRecords = std::move(selectedRoomEdgeRecords);
-
-        roomEdgeIndices.resize(rooms.size());
-        std::sort(roomEdgeRecords.begin(), roomEdgeRecords.end(), [](const auto& left, const auto& right) {
-                return left.nodes[0] < right.nodes[0];
-            });
-        for (uint32_t roomi = 0, edgei = 0; roomi < rooms.size(); ++roomi)
-        {
-            for (; edgei < roomEdgeRecords.size() && roomEdgeRecords[edgei].nodes[0] < roomi; ++edgei);
-            roomEdgeIndices[roomi].first = edgei;
-            for (; edgei < roomEdgeRecords.size() && roomEdgeRecords[edgei].nodes[0] == roomi; ++edgei);
-            roomEdgeIndices[roomi].second = edgei;
-        }
-
-        // determine the degree of "interiority" by assigning terminal rooms a value of 1 and iteratively increasing for each neighbor
-        std::vector<uint32_t> interiority(rooms.size(), 0);
-        std::queue<std::pair<uint32_t, uint32_t>> interiorityProcessQueue; // first: index of room, second: score
-        for (uint32_t i = 0; i < rooms.size(); ++i)
-        {
-            if (roomEdgeIndices[i].second <= roomEdgeIndices[i].first + 1)
-            {
-                interiorityProcessQueue.emplace(i, 1);
-            }
-        }
-
-        uint32_t maxInteriorityIndex = rooms.size();
-        while (!interiorityProcessQueue.empty())
-        {
-            auto [index, score] = interiorityProcessQueue.front();
-            interiorityProcessQueue.pop();
-            if (interiority[index] == 0)
-            {
-                maxInteriorityIndex = index;
-                interiority[index] = score;
-                for (uint32_t i = roomEdgeIndices[index].first; i < roomEdgeIndices[index].second; ++i)
-                {
-                    interiorityProcessQueue.emplace(roomEdgeRecords[i].nodes[1], score + 1);
-                }
-            }
-        }
-
-        std::cout << "max interiority: " << maxInteriorityIndex << std::endl;
-        std::cout << "interiority: ";
-        for (auto i : interiority) std::cout << i << ", ";
-        std::cout << std::endl;
-
-
-        // std::cout << "FINAL:" << std::endl;
-        printRoomChars({}, roomEdges);
-    }
-
     void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app) override
     {
         physicsWorld.reset(fff::createPhysicsWorld());
+        physicsWorld->getPhysicsSystem().SetGravity(JPH::Vec3(0, 0, 0));
 
         textures = {
             .blank = resourceLoader.loadTexture("resources/textures/blank.png"),
@@ -529,14 +688,22 @@ struct GameLogic final : eng::GameLogicInterface
 
         skeletonResources = loadGeometryObj(resourceLoader, "resources/models/skeleton.obj", textures.blank, "resources");
 
-        map = wmap::load("resources/maps/test.map");
-        mapResourcePairs = wmap::createGeometry(map, resourceLoader, "resources/textures");
+        /* map = wmap::load("resources/maps/test.map");
+        mapResourcePairs = wmap::createGeometry(map, resourceLoader, "resources/textures"); */
 
-        std::mt19937_64 prng;
-        for (int i = 0; i < 50; ++i) generateRooms(prng());
+        auto dungeon = Dungeon::generate(Dungeon::GenerationParams {
+                    .seed = 9999934,
+                    .width = 60,
+                    .height = 40,
+                    .partitionedRoomCount = 25,
+                    .targetRoomCount = 12,
+                    .minSplitDimension = 6,
+                    .minPortalOverlap = 2,
+                });
+        dungeonGeometryResource = resourceLoader.createGeometry(dungeon.createGeometry(5));
 
         std::vector<JPH::Vec3> shapePoints;
-        for (const auto& mshape : map.shapes)
+        /* for (const auto& mshape : map.shapes)
         {
             shapePoints.clear();
             for (const auto& face : mshape.faces)
@@ -556,7 +723,7 @@ struct GameLogic final : eng::GameLogicInterface
                         JPH::BodyCreationSettings(shape, JPH::Vec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static, 0),
                         JPH::EActivation::DontActivate);
             }
-        }
+        } */
 
         enemyTextures = {
             { SpriteDirection::d0, resourceLoader.loadTexture("resources/textures/body/0001.png") },
@@ -585,7 +752,7 @@ struct GameLogic final : eng::GameLogicInterface
 
         const auto& enemyShape = shapeRefs.emplace_back(new JPH::SphereShape(0.25f));
 
-        for (const auto& entity : map.entities)
+        /* for (const auto& entity : map.entities)
         {
             glm::vec3 position(0);
             if (auto paramIter = entity.params.find("origin"); paramIter != entity.params.end())
@@ -634,7 +801,7 @@ struct GameLogic final : eng::GameLogicInterface
                     plasmas.push_back({ position, glm::identity<glm::quat>() });
                 }
             }
-        }
+        } */
 
         const auto& capsuleShape = shapeRefs.emplace_back(new JPH::CapsuleShape(0.6f, 0.2f));
 
@@ -707,13 +874,13 @@ struct GameLogic final : eng::GameLogicInterface
         sceneLayer.decals.clear();
         sceneLayer.decals.insert(sceneLayer.decals.end(), bloodDecals.begin(), bloodDecals.end());
 
-        for (const auto& [materialResource, geometryResource] : mapResourcePairs)
+        /* for (const auto& [materialResource, geometryResource] : mapResourcePairs)
         {
             sceneLayer.geometryInstances.push_back(eng::GeometryInstance {
                         .textureIndex = materialResource,
                         .geometryIndex = geometryResource,
                     });
-        }
+        } */
 
         for (uint32_t i = 0; i < enemies.size(); ++i)
         {
@@ -770,9 +937,18 @@ struct GameLogic final : eng::GameLogicInterface
         overlayLayer.viewport = { .offset = { 0, framebufferHeight }, .extent = { framebufferWidth, -static_cast<float>(framebufferHeight) } };
         overlayLayer.scissor = { .extent = { framebufferWidth, framebufferHeight } };
         overlayLayer.projection = glm::orthoRH_ZO(-aspectRatio, aspectRatio, -1.0f, 1.0f, -1.0f, 1.0f);
-        overlayLayer.ambientLight = glm::vec3(1);
+        overlayLayer.ambientLight = glm::vec3(1); */
 
-        if (showMuzzleFlash)
+        sceneLayer.geometryInstances.push_back(eng::GeometryInstance {
+                    // .position = glm::vec3(-3, 0, 0),
+                    // .scale = glm::vec3(0.5),
+                    // .position = { -1.0f, -0.35f, 0.0f },
+                    // .scale = glm::vec3( 1.0f / 300.0f ),
+                    .textureIndex = textures.blank,
+                    .geometryIndex = dungeonGeometryResource,
+                });
+
+        /* if (showMuzzleFlash)
         {
             overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
                         .position = { 0.5f, -0.5f, 0.0f },
@@ -976,7 +1152,6 @@ struct GameLogic final : eng::GameLogicInterface
 
         playerCharacter->UpdateGroundVelocity();
         auto velocity = jph_to_glm(playerCharacter->GetLinearVelocity());
-        auto groundVelocity = jph_to_glm(playerCharacter->GetGroundVelocity());
 
         for (const auto& contact : playerCharacter->GetActiveContacts())
         {
@@ -988,49 +1163,6 @@ struct GameLogic final : eng::GameLogicInterface
             }
         }
         
-        bool jumpHold = false;
-        for (const auto& mapping : inputMappings.jumpHold)
-        {
-            if (input.getBoolean(mapping))
-            {
-                jumpHold = true;
-                break;
-            }
-        }
-
-        bool jumpPress = false;
-        for (const auto& mapping : inputMappings.jump)
-        {
-            if (input.getBoolean(mapping))
-            {
-                jumpPress = true;
-                break;
-            }
-        }
-
-        if (inJump && (jumpHoldTimer <= jumpMinHoldTime || jumpHold) && velocity.y < jumpMaxVelocity)
-        {
-            jumpHoldTimer += deltaTime;
-            velocity.y += jumpHoldAcceleration * deltaTime;
-        }
-        else
-        {
-            inJump = false;
-            jumpHoldTimer = 0;
-        }
-
-        if (velocity.y - groundVelocity.y < 0.1f &&
-            playerCharacter->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround)
-        {
-            velocity = glm::vec3(velocity.x, 0, velocity.z) + groundVelocity;
-            if (jumpPress)
-            {
-                velocity.y += jumpMinVelocity;
-                inJump = true;
-            }
-        }
-
-        velocity += jph_to_glm(physicsWorld->getPhysicsSystem().GetGravity() * deltaTime);
         playerCharacter->SetLinearVelocity(glm_to_jph(velocity));
         physicsWorld->updateCharacter(*playerCharacter, deltaTime);
 
