@@ -476,29 +476,29 @@ struct Dungeon
 
                 if (i == 0)
                 {
-                    points[0] = glm::vec3(room.x + wallThickness, 0, room.y + room.height);
-                    points[1] = glm::vec3(room.x + wallThickness, 0, room.y);
+                    points[0] = glm::vec3(room.x + wallThickness, 0, room.y + room.height - wallThickness);
+                    points[1] = glm::vec3(room.x + wallThickness, 0, room.y + wallThickness);
                     dir = glm::vec3(0, 0, -1);
                     normal = glm::vec3(1, 0, 0);
                 }
                 else if (i == 1)
                 {
-                    points[0] = glm::vec3(room.x, 0, room.y + wallThickness);
-                    points[1] = glm::vec3(room.x + room.width, 0, room.y + wallThickness);
+                    points[0] = glm::vec3(room.x + wallThickness, 0, room.y + wallThickness);
+                    points[1] = glm::vec3(room.x + room.width - wallThickness, 0, room.y + wallThickness);
                     dir = glm::vec3(1, 0, 0);
                     normal = glm::vec3(0, 0, 1);
                 }
                 else if (i == 2)
                 {
-                    points[0] = glm::vec3(room.x + room.width - wallThickness, 0, room.y);
-                    points[1] = glm::vec3(room.x + room.width - wallThickness, 0, room.y + room.height);
+                    points[0] = glm::vec3(room.x + room.width - wallThickness, 0, room.y + wallThickness);
+                    points[1] = glm::vec3(room.x + room.width - wallThickness, 0, room.y + room.height - wallThickness);
                     dir = glm::vec3(0, 0, 1);
                     normal = glm::vec3(-1, 0, 0);
                 }
                 else
                 {
-                    points[0] = glm::vec3(room.x + room.width, 0, room.y + room.height - wallThickness);
-                    points[1] = glm::vec3(room.x, 0, room.y + room.height - wallThickness);
+                    points[0] = glm::vec3(room.x + room.width - wallThickness, 0, room.y + room.height - wallThickness);
+                    points[1] = glm::vec3(room.x + wallThickness, 0, room.y + room.height - wallThickness);
                     dir = glm::vec3(-1, 0, 0);
                     normal = glm::vec3(0, 0, -1);
                 }
@@ -633,8 +633,10 @@ struct GameLogic final : eng::GameLogicInterface
         uint32_t gun;
         uint32_t muzzle_flash;
         uint32_t blood;
-        uint32_t player;
+        std::vector<uint32_t> playerWalk;
+        uint32_t playerSlide;
         uint32_t rat;
+        uint32_t floor;
     } textures;
 
     std::vector<std::pair<uint32_t, uint32_t>> skeletonResources;
@@ -696,7 +698,7 @@ struct GameLogic final : eng::GameLogicInterface
     float timeExitedFlickThreshold = 0;
 
     uint32_t animationCounter = 0;
-    const uint32_t animationFPS = 24;
+    const uint32_t animationFPS = 8;
     double animationTimer = 0;
 
     std::unique_ptr<fff::PhysicsWorldInterface> physicsWorld;
@@ -750,8 +752,10 @@ struct GameLogic final : eng::GameLogicInterface
             .gun = resourceLoader.loadTexture("resources/textures/gun.png"),
             .muzzle_flash = resourceLoader.loadTexture("resources/textures/muzzle_flash.png"),
             .blood = resourceLoader.loadTexture("resources/textures/blood.png"),
-            .player = resourceLoader.loadTexture("resources/textures/player.png"),
+            .playerWalk = getIndexedTextures(resourceLoader, "resources/textures/player/PCWalk{:}.png", 1, 4),
+            .playerSlide = resourceLoader.loadTexture("resources/textures/player/PCSlide.png"),
             .rat = resourceLoader.loadTexture("resources/textures/rat.png"),
+            .floor = resourceLoader.loadTexture("resources/textures/floor1_floortexrture.png"),
         };
 
         inputMappings = {
@@ -791,7 +795,7 @@ struct GameLogic final : eng::GameLogicInterface
                     .minSplitDimension = 6,
                     .minPortalOverlap = 2,
                 });
-        dungeonGeometryResource = resourceLoader.createGeometry(dungeon.createGeometry(5, 1.0f, 0.1f));
+        dungeonGeometryResource = resourceLoader.createGeometry(dungeon.createGeometry(2, 1.0f, 0.1f));
 
         // std::vector<JPH::Vec3> shapePoints;
         /* for (const auto& mshape : map.shapes)
@@ -817,7 +821,7 @@ struct GameLogic final : eng::GameLogicInterface
         } */
 
         std::vector<JPH::BodyID> mapBodies;
-        dungeon.createPhysicsBodies(5, 1, 0.5, mapBodies, shapeRefs, physicsWorld->getPhysicsSystem());
+        dungeon.createPhysicsBodies(2, 1, 0.5, mapBodies, shapeRefs, physicsWorld->getPhysicsSystem());
 
 
         enemyTextures = {
@@ -898,10 +902,8 @@ struct GameLogic final : eng::GameLogicInterface
             }
         } */
 
-        const auto& capsuleShape = shapeRefs.emplace_back(new JPH::CapsuleShape(0.6f, 0.2f));
-
         JPH::CharacterVirtualSettings characterSettings;
-        characterSettings.mShape = capsuleShape;
+        characterSettings.mShape = shapeRefs.emplace_back(new JPH::BoxShape(JPH::Vec3(0.1f, 0.6f, 0.1f)));
         characterSettings.mMaxSlopeAngle = JPH::DegreesToRadians(45.0);
         characterSettings.mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -0.2f);
         playerCharacter = new JPH::CharacterVirtual(&characterSettings,
@@ -1017,7 +1019,7 @@ struct GameLogic final : eng::GameLogicInterface
                     .position = jph_to_glm(playerCharacter->GetPosition()),
                     .scale = glm::vec3(0.25),
                     .angle = playerAngle,
-                    .textureIndex = textures.player,
+                    .textureIndex = textures.playerWalk[animationCounter % textures.playerWalk.size()],
                 });
 
         sceneLayer.lights.push_back(eng::Light {
@@ -1039,7 +1041,7 @@ struct GameLogic final : eng::GameLogicInterface
                     // .scale = glm::vec3(0.5),
                     // .position = { -1.0f, -0.35f, 0.0f },
                     // .scale = glm::vec3( 1.0f / 300.0f ),
-                    .textureIndex = textures.blank,
+                    .textureIndex = textures.floor,
                     .geometryIndex = dungeonGeometryResource,
                 });
 
@@ -1085,11 +1087,11 @@ struct GameLogic final : eng::GameLogicInterface
     void runFrame(eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, const double deltaTime) override
     {
         animationTimer += deltaTime;
-        if (animationTimer >= 1.0)
+        while (animationTimer >= 1.0 / animationFPS)
         {
-            animationTimer -= std::floor(animationTimer);
+            ++animationCounter;
+            animationTimer -= 1.0 / animationFPS;
         }
-        animationCounter = static_cast<uint32_t>(animationFPS * animationTimer);
 
         const auto [windowWidth, windowHeight] = app.getWindowSize();
         const glm::vec2 mouseLookInput = {
