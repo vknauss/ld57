@@ -182,6 +182,16 @@ struct GameLogic final : eng::GameLogicInterface
     {
         physicsWorld.reset(fff::createPhysicsWorld());
         // physicsWorld->getPhysicsSystem().SetGravity(JPH::Vec3(0, 0, 0));
+        //
+        physicsWorld->setOnCollisionEnter([this](const JPH::BodyID body0, const JPH::BodyID body1){
+                    auto it = std::find_if(bullets.begin(), bullets.end(), [body0](const auto& bullet) { return bullet.bodyID == body0; });
+                    if (it != bullets.end())
+                    {
+                        physicsWorld->getPhysicsSystem().GetBodyInterface().RemoveBody(body0);
+                        physicsWorld->getPhysicsSystem().GetBodyInterface().DestroyBody(body0);
+                        bullets.erase(it);
+                    }
+                });
 
         textures = {
             .blank = resourceLoader.loadTexture("resources/textures/blank.png"),
@@ -496,7 +506,6 @@ struct GameLogic final : eng::GameLogicInterface
         }
         if (shoot)
         {
-            std::cout << "b" << std::endl;
             shootTimer = shootTimeout;
             auto& bullet = bullets.emplace_back(
                     physicsWorld->getPhysicsSystem().GetBodyInterface().CreateAndAddBody(

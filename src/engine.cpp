@@ -7,8 +7,10 @@
 #include "swapchain.hpp"
 #include "texture_loader.hpp"
 #include "vulkan_includes.hpp"
+#include "util.hpp"
 
 #define SDL_MAIN_USE_CALLBACKS 1
+#include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_log.h>
 #include <SDL3/SDL_main.h>
@@ -135,6 +137,22 @@ struct SDLWindowSurfaceWrapper
     operator const vk::SurfaceKHR&() const
     {
         return surface;
+    }
+};
+
+struct Audio
+{
+    SDL_AudioStream* audioStream;
+
+    Audio()
+    {
+        audioStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, nullptr, nullptr, nullptr);
+        SDL_ResumeAudioStreamDevice(audioStream);
+    }
+
+    ~Audio()
+    {
+        SDL_DestroyAudioStream(audioStream);
     }
 };
 
@@ -395,18 +413,6 @@ struct AppInterfaceProvider final : public AppInterface
     }
 };
 
-template<auto T>
-struct InitShim {};
-
-template<typename T, typename Ret, typename ... Args, Ret (T::*Fn) (Args...)>
-struct InitShim<Fn>
-{
-    InitShim(T& obj, Args&& ... args)
-    {
-        (obj.*Fn)(std::forward<Args>(args)...);
-    }
-};
-
 class Application
 {
     std::unique_ptr<GameLogicInterface> gameLogic;
@@ -422,6 +428,7 @@ class Application
     const SDLWindowSurfaceWrapper surface;
     const vk::SurfaceFormatKHR surfaceFormat;
     const vk::Format depthFormat;
+    Audio audio;
     Swapchain swapchain;
     LoaderUtility loaderUtility;
     TextureLoader textureLoader;
