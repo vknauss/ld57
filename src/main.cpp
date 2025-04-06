@@ -433,10 +433,6 @@ struct Dungeon
     {
         eng::GeometryDescription geometry;
 
-        constexpr glm::vec3 wallNormals[] {
-            { 1, 0, 0 }, { 0, 0, 1 }, { -1, 0, 0 }, { 0, 0, -1 },
-        };
-
         std::queue<uint32_t> wallNodeIndices;
 
         for (const auto& room : rooms)
@@ -476,31 +472,35 @@ struct Dungeon
                 geometry.indices.push_back(geometry.positions.size() + 3);
 
                 glm::vec3 points[2];
-                glm::vec3 dir;
+                glm::vec3 dir, normal;
 
                 if (i == 0)
                 {
                     points[0] = glm::vec3(room.x + wallThickness, 0, room.y + room.height);
                     points[1] = glm::vec3(room.x + wallThickness, 0, room.y);
                     dir = glm::vec3(0, 0, -1);
+                    normal = glm::vec3(1, 0, 0);
                 }
                 else if (i == 1)
                 {
                     points[0] = glm::vec3(room.x, 0, room.y + wallThickness);
                     points[1] = glm::vec3(room.x + room.width, 0, room.y + wallThickness);
                     dir = glm::vec3(1, 0, 0);
+                    normal = glm::vec3(0, 0, 1);
                 }
                 else if (i == 2)
                 {
                     points[0] = glm::vec3(room.x + room.width - wallThickness, 0, room.y);
                     points[1] = glm::vec3(room.x + room.width - wallThickness, 0, room.y + room.height);
                     dir = glm::vec3(0, 0, 1);
+                    normal = glm::vec3(-1, 0, 0);
                 }
                 else
                 {
                     points[0] = glm::vec3(room.x + room.width, 0, room.y + room.height - wallThickness);
                     points[1] = glm::vec3(room.x, 0, room.y + room.height - wallThickness);
                     dir = glm::vec3(-1, 0, 0);
+                    normal = glm::vec3(0, 0, -1);
                 }
 
                 float tc[] = { glm::dot(dir, points[0]), glm::dot(dir, points[1]) };
@@ -509,8 +509,8 @@ struct Dungeon
                 geometry.positions.push_back(points[0] + glm::vec3(0, wallHeight, 0));
                 geometry.texCoords.push_back(glm::vec2(tc[0], 0));
                 geometry.texCoords.push_back(glm::vec2(tc[0], wallHeight));
-                geometry.normals.push_back(wallNormals[i]);
-                geometry.normals.push_back(wallNormals[i]);
+                geometry.normals.push_back(normal);
+                geometry.normals.push_back(normal);
 
                 for (uint32_t j = room.wallStartPortalRecord.i[i]; j < (i < 3 ? room.wallStartPortalRecord.i[i + 1] : room.portalRecordsRange.end); ++j)
                 {
@@ -523,8 +523,8 @@ struct Dungeon
                     geometry.positions.push_back(pos - 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
                     geometry.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, 0));
                     geometry.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, wallHeight));
-                    geometry.normals.push_back(wallNormals[i]);
-                    geometry.normals.push_back(wallNormals[i]);
+                    geometry.normals.push_back(normal);
+                    geometry.normals.push_back(normal);
 
                     geometry.indices.push_back(geometry.positions.size());
                     geometry.indices.push_back(geometry.positions.size() + 1);
@@ -537,20 +537,91 @@ struct Dungeon
                     geometry.positions.push_back(pos + 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
                     geometry.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, 0));
                     geometry.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, wallHeight));
-                    geometry.normals.push_back(wallNormals[i]);
-                    geometry.normals.push_back(wallNormals[i]);
+                    geometry.normals.push_back(normal);
+                    geometry.normals.push_back(normal);
                 }
 
                 geometry.positions.push_back(points[1]);
                 geometry.positions.push_back(points[1] + glm::vec3(0, wallHeight, 0));
                 geometry.texCoords.push_back(glm::vec2(tc[1], 0));
                 geometry.texCoords.push_back(glm::vec2(tc[1], wallHeight));
-                geometry.normals.push_back(wallNormals[i]);
-                geometry.normals.push_back(wallNormals[i]);
+                geometry.normals.push_back(normal);
+                geometry.normals.push_back(normal);
             }
         }
 
         return geometry;
+    }
+
+    void createPhysicsBodies(const float wallHeight, const float doorWidth, const float wallThickness,
+            std::vector<JPH::BodyID>& bodies, std::vector<JPH::Ref<JPH::Shape>>& shapeRefs, JPH::PhysicsSystem& physicsSystem) const
+    {
+        std::queue<uint32_t> wallNodeIndices;
+
+        for (const auto& room : rooms)
+        {
+            bodies.push_back(physicsSystem.GetBodyInterface().CreateAndAddBody(
+                        JPH::BodyCreationSettings(shapeRefs.emplace_back(new JPH::BoxShape(JPH::Vec3(room.width * 0.5, 0.5, room.height * 0.5))),
+                            JPH::Vec3(room.x + 0.5 * room.width, - 0.5, room.y + 0.5 * room.height), JPH::Quat::sIdentity(), JPH::EMotionType::Static, 0),
+                        JPH::EActivation::DontActivate));
+
+            for (uint32_t i = 0; i < 4; ++i)
+            {
+                glm::vec3 points[2];
+                glm::vec3 dir, normal;
+
+                if (i == 0)
+                {
+                    points[0] = glm::vec3(room.x, 0, room.y + room.height);
+                    points[1] = glm::vec3(room.x, 0, room.y);
+                    dir = glm::vec3(0, 0, -1);
+                    normal = glm::vec3(1, 0, 0);
+                }
+                else if (i == 1)
+                {
+                    points[0] = glm::vec3(room.x, 0, room.y);
+                    points[1] = glm::vec3(room.x + room.width, 0, room.y);
+                    dir = glm::vec3(1, 0, 0);
+                    normal = glm::vec3(0, 0, 1);
+                }
+                else if (i == 2)
+                {
+                    points[0] = glm::vec3(room.x + room.width, 0, room.y);
+                    points[1] = glm::vec3(room.x + room.width, 0, room.y + room.height);
+                    dir = glm::vec3(0, 0, 1);
+                    normal = glm::vec3(-1, 0, 0);
+                }
+                else
+                {
+                    points[0] = glm::vec3(room.x + room.width, 0, room.y + room.height);
+                    points[1] = glm::vec3(room.x, 0, room.y + room.height);
+                    dir = glm::vec3(-1, 0, 0);
+                    normal = glm::vec3(0, 0, -1);
+                }
+
+                glm::vec3 lastPoint = points[0];
+
+                for (uint32_t j = room.wallStartPortalRecord.i[i]; j < (i < 3 ? room.wallStartPortalRecord.i[i + 1] : room.portalRecordsRange.end); ++j)
+                {
+                    const auto& portal = portals[roomPortalRecords[j].portal];
+
+                    glm::vec3 pos(portal.x, 0, portal.y);
+                    pos -= 0.5f * doorWidth * dir;
+
+                    bodies.push_back(physicsSystem.GetBodyInterface().CreateAndAddBody(
+                                JPH::BodyCreationSettings(shapeRefs.emplace_back(new JPH::BoxShape(glm_to_jph(glm::abs(0.5f * (pos - lastPoint + 0.5f * wallThickness * normal + glm::vec3(0, wallHeight, 0)))))),
+                                    glm_to_jph(0.5f * (pos + lastPoint + 0.5f * wallThickness * normal + glm::vec3(0, wallHeight, 0))), JPH::Quat::sIdentity(), JPH::EMotionType::Static, 0),
+                                JPH::EActivation::DontActivate));
+
+                    lastPoint = pos + doorWidth * dir;
+                }
+
+                bodies.push_back(physicsSystem.GetBodyInterface().CreateAndAddBody(
+                            JPH::BodyCreationSettings(shapeRefs.emplace_back(new JPH::BoxShape(glm_to_jph(glm::abs(0.5f * (points[1] - lastPoint + 0.5f * wallThickness * normal + glm::vec3(0, wallHeight, 0)))))),
+                                glm_to_jph(0.5f * (points[1] + lastPoint + 0.5f * wallThickness * normal + glm::vec3(0, wallHeight, 0))), JPH::Quat::sIdentity(), JPH::EMotionType::Static, 0),
+                            JPH::EActivation::DontActivate));
+            }
+        }
     }
 };
 
@@ -722,7 +793,7 @@ struct GameLogic final : eng::GameLogicInterface
                 });
         dungeonGeometryResource = resourceLoader.createGeometry(dungeon.createGeometry(5, 1.0f, 0.1f));
 
-        std::vector<JPH::Vec3> shapePoints;
+        // std::vector<JPH::Vec3> shapePoints;
         /* for (const auto& mshape : map.shapes)
         {
             shapePoints.clear();
@@ -744,6 +815,10 @@ struct GameLogic final : eng::GameLogicInterface
                         JPH::EActivation::DontActivate);
             }
         } */
+
+        std::vector<JPH::BodyID> mapBodies;
+        dungeon.createPhysicsBodies(5, 1, 0.5, mapBodies, shapeRefs, physicsWorld->getPhysicsSystem());
+
 
         enemyTextures = {
             { SpriteDirection::d0, resourceLoader.loadTexture("resources/textures/body/0001.png") },
@@ -767,7 +842,7 @@ struct GameLogic final : eng::GameLogicInterface
             { SpriteDirection::d315, getIndexedTextures(resourceLoader, "resources/textures/plasma/{:04}.png", 168, 24) },
         };
 
-        glm::vec3 playerStartPosition(0, 1, 0);
+        glm::vec3 playerStartPosition(30, 1, 20);
         glm::quat playerStartOrientation = glm::identity<glm::quat>();
 
         const auto& enemyShape = shapeRefs.emplace_back(new JPH::SphereShape(0.25f));
@@ -960,7 +1035,7 @@ struct GameLogic final : eng::GameLogicInterface
         overlayLayer.ambientLight = glm::vec3(1); */
 
         sceneLayer.geometryInstances.push_back(eng::GeometryInstance {
-                    .position = glm::vec3(-30, 0, -20),
+                    // .position = glm::vec3(-30, 0, -20),
                     // .scale = glm::vec3(0.5),
                     // .position = { -1.0f, -0.35f, 0.0f },
                     // .scale = glm::vec3( 1.0f / 300.0f ),
