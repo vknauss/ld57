@@ -5,7 +5,6 @@
 #include "jph_glm_convert.hpp"
 
 #include <iostream>
-#include <map>
 #include <memory>
 #include <vector>
 #include <glm/glm.hpp>
@@ -47,7 +46,7 @@ struct Enemy
 {
     enum class State
     {
-        Idle, Damaged, Dead,
+        Initial, Idle, Damaged, Dead,
     };
 
     // uint32_t sprite = 0;
@@ -55,16 +54,12 @@ struct Enemy
     float angle = 0;
     glm::vec2 extents = glm::vec3(0.5);
     State state = State::Idle;
-    State lastState = State::Idle;
+    State lastState = State::Initial;
     float stateTime = 0.0f;
-    int health = 10;
-    int maxHealth = 10;
+    int health = 5;
+    int maxHealth = 5;
+    glm::vec3 poi;
     JPH::Ref<JPH::Character> character;
-};
-
-enum class SpriteDirection
-{
-    d0, d45, d90, d135, d180, d225, d270, d315
 };
 
 namespace PlayerStates
@@ -88,11 +83,7 @@ struct GameLogic final : eng::GameLogicInterface
 {
     struct {
         uint32_t blank;
-        uint32_t lockOn;
-        uint32_t gun;
-        uint32_t muzzle_flash;
         uint32_t blood;
-        uint32_t rat;
         uint32_t floor;
         uint32_t bullet;
         uint32_t splat;
@@ -100,8 +91,6 @@ struct GameLogic final : eng::GameLogicInterface
         std::vector<uint32_t> player[PlayerStates::MAX_VALUE];
         std::vector<uint32_t> spiderWalk;
     } textures;
-
-    std::map<SpriteDirection, uint32_t> enemyTextures;
 
     uint32_t dungeonGeometryResource;
 
@@ -124,10 +113,11 @@ struct GameLogic final : eng::GameLogicInterface
     const float movementSpeed = 7.0f;
     const float cosineThresholdCardinal = glm::cos(glm::radians(22.5));
     const uint32_t animationFPS = 8;
-    const float shootTimeout = 0.4f;
+    const float shootCooldown = 0.4f;
     const glm::vec3 bulletOrigin = glm::vec3(0.0625, 0, -0.5);
     const float bulletSpeed = 20.0f;
     const float bulletRadius = 0.05f;
+    const float enemyDamageCooldown = 0.6f;
 
     const glm::vec2 fontTexCoordScale = { 1.0f / 16.0f, 1.0f / 8.0f };
 
@@ -139,7 +129,7 @@ struct GameLogic final : eng::GameLogicInterface
 
     std::vector<Enemy> enemies;
     std::vector<eng::Light> lights;
-    std::vector<eng::Decal> bloodDecals;
+    std::vector<eng::Decal> decals;
     std::vector<Bullet> bullets;
 
     uint32_t animationCounter = 0;
@@ -152,7 +142,7 @@ struct GameLogic final : eng::GameLogicInterface
     bool shootButtonPressed = false;
     bool shootNext = false;
 
-    std::string text = "X-Terminator 5000";
+    // std::string text = "X-Terminator 5000";
 
     ~GameLogic()
     {
@@ -186,40 +176,45 @@ struct GameLogic final : eng::GameLogicInterface
 
     void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio) override
     {
-        audio.createLoop("resources/audio/GasStationTheme.wav");
+        audio.createLoop("resources/audio/BossBattleMETALloop.wav");
 
         physicsWorld.reset(fff::createPhysicsWorld());
         // physicsWorld->getPhysicsSystem().SetGravity(JPH::Vec3(0, 0, 0));
         //
-        physicsWorld->setOnCollisionEnter([this](const JPH::BodyID body0, const JPH::BodyID body1){
-                    auto it = std::find_if(bullets.begin(), bullets.end(), [body0](const auto& bullet) { return bullet.bodyID == body0; });
-                    if (it != bullets.end())
+        physicsWorld->setOnCollisionEnter([this](const JPH::BodyID body0, const JPH::BodyID body1) {
+                if (auto bulletIter = std::find_if(bullets.begin(), bullets.end(),
+                            [body0](const auto& bullet) { return bullet.bodyID == body0; });
+                        bulletIter != bullets.end())
+                {
+                    physicsWorld->getPhysicsSystem().GetBodyInterface().RemoveBody(body0);
+                    physicsWorld->getPhysicsSystem().GetBodyInterface().DestroyBody(body0);
+                    bullets.erase(bulletIter);
+
+                    if (physicsWorld->getPhysicsSystem().GetBodyInterface().GetObjectLayer(body1) == 0)
                     {
-                        auto position = physicsWorld->getPhysicsSystem().GetBodyInterface().GetPosition(body0);
-
-                        physicsWorld->getPhysicsSystem().GetBodyInterface().RemoveBody(body0);
-                        physicsWorld->getPhysicsSystem().GetBodyInterface().DestroyBody(body0);
-                        bullets.erase(it);
-
                         const auto [ idPair, contact ] = physicsWorld->getContacts(body0, body1).front();
                         bool first = idPair.GetBody1ID() == body0;
 
-                        bloodDecals.push_back(eng::Decal {
+                        decals.push_back(eng::Decal {
                                 .position = jph_to_glm(first ? contact.GetWorldSpaceContactPointOn2(0) : contact.GetWorldSpaceContactPointOn1(0)),
                                 .scale = glm::vec3(1, 1, 0.05),
                                 .rotation = glm::rotation(glm::vec3(0, 0, -1), jph_to_glm(contact.mWorldSpaceNormal)) * glm::angleAxis(glm::linearRand(0.0f, glm::pi<float>()), glm::vec3(0, 0, 1)),
                                 .textureIndex = textures.splat,
                             });
                     }
-                });
+
+                    if (auto enemyIter = std::find_if(enemies.begin(), enemies.end(),
+                                [body1](const auto& enemy) { return enemy.character->GetBodyID() == body1; });
+                            enemyIter != enemies.end())
+                    {
+                        enemyIter->state = Enemy::State::Damaged;
+                    }
+                }
+            });
 
         textures = {
             .blank = resourceLoader.loadTexture("resources/textures/blank.png"),
-            .lockOn = resourceLoader.loadTexture("resources/textures/corners.png"),
-            .gun = resourceLoader.loadTexture("resources/textures/gun.png"),
-            .muzzle_flash = resourceLoader.loadTexture("resources/textures/muzzle_flash.png"),
             .blood = resourceLoader.loadTexture("resources/textures/blood.png"),
-            .rat = resourceLoader.loadTexture("resources/textures/rat.png"),
             .floor = resourceLoader.loadTexture("resources/textures/floor1_floortexrture.png"),
             .bullet = resourceLoader.loadTexture("resources/textures/bullet.png"),
             .splat = resourceLoader.loadTexture("resources/textures/splat.png"),
@@ -287,18 +282,6 @@ struct GameLogic final : eng::GameLogicInterface
 
         if (playerStartRoom == dungeon.rooms.size()) throw std::runtime_error("failed to generate player start location");
 
-
-        enemyTextures = {
-            { SpriteDirection::d0, resourceLoader.loadTexture("resources/textures/body/0001.png") },
-            { SpriteDirection::d45, resourceLoader.loadTexture("resources/textures/body/0002.png") },
-            { SpriteDirection::d90, resourceLoader.loadTexture("resources/textures/body/0003.png") },
-            { SpriteDirection::d135, resourceLoader.loadTexture("resources/textures/body/0004.png") },
-            { SpriteDirection::d180, resourceLoader.loadTexture("resources/textures/body/0005.png") },
-            { SpriteDirection::d225, resourceLoader.loadTexture("resources/textures/body/0006.png") },
-            { SpriteDirection::d270, resourceLoader.loadTexture("resources/textures/body/0007.png") },
-            { SpriteDirection::d315, resourceLoader.loadTexture("resources/textures/body/0008.png") },
-        };
-
         glm::vec3 playerStartPosition(dungeon.rooms[playerStartRoom].x + dungeon.rooms[playerStartRoom].width / 2, 1,
                 dungeon.rooms[playerStartRoom].y + dungeon.rooms[playerStartRoom].height / 2);
 
@@ -334,28 +317,6 @@ struct GameLogic final : eng::GameLogicInterface
         // app.setWantsCursorLock(true);
     }
 
-    SpriteDirection getSpriteDirection(const glm::vec3& forward, const glm::vec3& right, const glm::vec3& entityFacingDirection)
-    {
-        const float dForward = glm::dot(forward, entityFacingDirection);
-        const float dRight = glm::dot(right, entityFacingDirection);
-        if (glm::abs(dForward) > cosineThresholdCardinal)
-        {
-            return (dForward > 0) ? SpriteDirection::d180 : SpriteDirection::d0;
-        }
-        else if (glm::abs(dRight) > cosineThresholdCardinal)
-        {
-            return (dRight > 0) ? SpriteDirection::d90 : SpriteDirection::d270;
-        }
-        else if (dForward > 0)
-        {
-            return (dRight > 0) ? SpriteDirection::d135 : SpriteDirection::d225;
-        }
-        else
-        {
-            return (dRight > 0) ? SpriteDirection::d45 : SpriteDirection::d315;
-        }
-    }
-
     void render(eng::SceneInterface& scene)
     {
         const auto [framebufferWidth, framebufferHeight] = scene.framebufferSize();
@@ -380,7 +341,7 @@ struct GameLogic final : eng::GameLogicInterface
                 });
 
         sceneLayer.decals.clear();
-        sceneLayer.decals.insert(sceneLayer.decals.end(), bloodDecals.begin(), bloodDecals.end());
+        sceneLayer.decals.insert(sceneLayer.decals.end(), decals.begin(), decals.end());
 
         for (uint32_t i = 0; i < enemies.size(); ++i)
         {
@@ -392,6 +353,13 @@ struct GameLogic final : eng::GameLogicInterface
                         .angle = enemy.angle,
                         .textureIndex = textures.spiderWalk[animationCounter % textures.spiderWalk.size()],
                         .tintColor = enemy.state == Enemy::State::Damaged ? glm::vec4(1.0, 0.5, 0.5, 1.0) : glm::vec4(1.0),
+                    });
+
+            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
+                        .position = enemy.position + glm::vec3(0, 0, 0.3f),
+                        .scale = 0.25f * glm::vec3(static_cast<float>(enemy.health) / enemy.maxHealth, 0.1f, 0),
+                        .textureIndex = textures.blank,
+                        .tintColor = glm::vec4(1, 0, 0, 1),
                     });
         }
 
@@ -426,6 +394,8 @@ struct GameLogic final : eng::GameLogicInterface
         overlayLayer.projection = glm::orthoRH_ZO(-aspectRatio, aspectRatio, -1.0f, 1.0f, -1.0f, 1.0f);
         overlayLayer.ambientLight = glm::vec3(1);
         
+
+        std::string text = (std::stringstream{} << "enemies remaining: " << enemies.size()).str();
         const glm::vec2 textPos(-0.5, -0.875);
         const float textScale = 0.1;
         const float fontAspect = fontTexCoordScale.x / fontTexCoordScale.y;
@@ -446,14 +416,6 @@ struct GameLogic final : eng::GameLogicInterface
                     .textureIndex = textures.font,
                     .tintColor = glm::vec4(1, 0, 0, 1),
                 });
-        }
-    }
-
-    void enemyUpdateDamaged(Enemy& enemy, const float deltaTime)
-    {
-        if (enemy.stateTime > 1.0f)
-        {
-            enemy.state = Enemy::State::Idle;
         }
     }
 
@@ -542,7 +504,7 @@ struct GameLogic final : eng::GameLogicInterface
         }
         if (shoot)
         {
-            shootTimer = shootTimeout;
+            shootTimer = shootCooldown;
             auto& bullet = bullets.emplace_back(
                     physicsWorld->getPhysicsSystem().GetBodyInterface().CreateAndAddBody(
                         JPH::BodyCreationSettings(bulletShape,
@@ -559,9 +521,29 @@ struct GameLogic final : eng::GameLogicInterface
         {
             enemy.position = jph_to_glm(enemy.character->GetPosition());
 
+            const auto findPoi = [&]() {
+                const float maxDistance = glm::linearRand(1.0f, 5.0f);
+                const glm::vec2 dir = glm::circularRand(maxDistance);
+                enemy.poi = jph_to_glm(enemy.character->GetPosition()) + glm::vec3(dir.x, 0, dir.y);
+                const JPH::RRayCast raycast(enemy.character->GetPosition(), JPH::Vec3(dir.x, 0, dir.y));
+                JPH::RayCastResult raycastResult;
+                if (physicsWorld->getPhysicsSystem().GetNarrowPhaseQuery().CastRay(raycast, raycastResult, JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(0))))
+                {
+                    JPH::BodyLockRead lock(physicsWorld->getPhysicsSystem().GetBodyLockInterface(), raycastResult.mBodyID);
+                    if (lock.Succeeded())
+                    {
+                        enemy.poi = jph_to_glm(raycast.GetPointOnRay(glm::max(0.0f, raycastResult.mFraction - 0.1f / maxDistance)));
+                    }
+                }
+            };
+
             if (enemy.state != enemy.lastState)
             {
-                if (enemy.state == Enemy::State::Damaged)
+                if (enemy.state == Enemy::State::Idle)
+                {
+                    findPoi();
+                }
+                else if (enemy.state == Enemy::State::Damaged)
                 {
                     const glm::vec3 deltaPos = enemy.position - cameraPosition;
                     const glm::vec3 deltaHPos = glm::vec3(deltaPos.x, 0, deltaPos.z);
@@ -569,6 +551,27 @@ struct GameLogic final : eng::GameLogicInterface
                     {
                         const glm::vec3 forward = glm::normalize(deltaHPos);
                         enemy.character->AddImpulse(glm_to_jph(forward) * 100.0f);
+                    }
+
+                    const JPH::RRayCast raycast(enemy.character->GetPosition(),
+                        glm_to_jph(glm::angleAxis(glm::linearRand(0.0f, 2.0f * glm::pi<float>()), glm::vec3(0, 1, 0)) *
+                            glm::angleAxis(glm::linearRand(0.0f, glm::radians(15.0f)), glm::vec3(1, 0, 0)) *
+                            glm::vec3(0, -5, 0)));
+                    JPH::RayCastResult raycastResult;
+                    if (physicsWorld->getPhysicsSystem().GetNarrowPhaseQuery().CastRay(raycast, raycastResult, JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(0))))
+                    {
+                        JPH::BodyLockRead lock(physicsWorld->getPhysicsSystem().GetBodyLockInterface(), raycastResult.mBodyID);
+                        if (lock.Succeeded())
+                        {
+                            const auto position = raycast.GetPointOnRay(raycastResult.mFraction);
+                            const auto normal = lock.GetBody().GetWorldSpaceSurfaceNormal(raycastResult.mSubShapeID2, position);
+                            decals.push_back(eng::Decal {
+                                    .position = jph_to_glm(position),
+                                    .scale = glm::vec3(1, 1, 0.05),
+                                    .rotation = glm::rotation(glm::vec3(0, 0, -1), jph_to_glm(normal)) * glm::angleAxis(glm::linearRand(0.0f, glm::pi<float>()), glm::vec3(0, 0, 1)),
+                                    .textureIndex = textures.blood,
+                                });
+                        }
                     }
 
                     --enemy.health;
@@ -582,17 +585,29 @@ struct GameLogic final : eng::GameLogicInterface
                 enemy.stateTime = 0;
             }
 
-            if (enemy.state == Enemy::State::Damaged && enemy.stateTime >= 1.0f)
+            if (enemy.state == Enemy::State::Idle)
             {
-                enemy.state = Enemy::State::Idle;
+                if (glm::distance2(enemy.position, enemy.poi) < 1)
+                {
+                    findPoi();
+                }
+                else
+                {
+                    enemy.angle = glm::atan(enemy.position.x - enemy.poi.x, enemy.position.z - enemy.poi.z);
+                    enemy.character->SetLinearVelocity(glm_to_jph(glm::normalize(enemy.poi - enemy.position)));
+                }
             }
+            else if (enemy.state == Enemy::State::Damaged)
+            {
+                if (enemy.stateTime >= enemyDamageCooldown)
+                {
+                    enemy.state = Enemy::State::Idle;
+                }
+            }
+
             if (enemy.health <= 0)
             {
                 enemy.state = Enemy::State::Dead;
-                /* if (lockedOnEnemy != -1 && &enemies[lockedOnEnemy] == &enemy)
-                {
-                    lockedOnEnemy = -1;
-                } */
             }
 
             enemy.stateTime += deltaTime;
