@@ -274,6 +274,11 @@ struct Audio final : eng::AudioInterface
         destroySound(index, singleShot, freeSingleShotIndices);
     }
 
+    void setMuted(const bool value) override
+    {
+        SDL_SetAudioDeviceGain(device, value ? 0 : 1);
+    }
+
     void update()
     {
         for (const auto& sound : loops)
@@ -541,6 +546,7 @@ struct Scene final : public SceneInterface
 struct AppInterfaceProvider final : public AppInterface
 {
     SDL_Window* window;
+    bool quitRequested = false;
 
     explicit AppInterfaceProvider(SDL_Window* window) :
         window(window)
@@ -550,6 +556,16 @@ struct AppInterfaceProvider final : public AppInterface
     {
         // SDL_SetWindowRelativeMouseMode(window, value);
         SDL_SetWindowMouseGrab(window, value);
+    }
+
+    void setWantsFullscreen(const bool value) override
+    {
+        SDL_SetWindowFullscreen(window, value);
+    }
+
+    void requestQuit() override
+    {
+        quitRequested = true;
     }
 
     std::pair<uint32_t, uint32_t> getWindowSize() const override
@@ -712,7 +728,7 @@ public:
         renderer.updateFrame(scene, geometry);
         renderer.drawFrame(swapchain, glm::vec2(scene.framebufferSize_.first, scene.framebufferSize_.second));
         inputManager.nextFrame();
-        return SDL_APP_CONTINUE;
+        return appInterface.quitRequested ? SDL_APP_SUCCESS : SDL_APP_CONTINUE;
     }
 };
 

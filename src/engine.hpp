@@ -132,6 +132,8 @@ namespace eng
     struct AppInterface
     {
         virtual void setWantsCursorLock(const bool value) = 0;
+        virtual void setWantsFullscreen(const bool value) = 0;
+        virtual void requestQuit() = 0;
         virtual std::pair<uint32_t, uint32_t> getWindowSize() const = 0;
     };
 
@@ -141,6 +143,7 @@ namespace eng
         virtual void destroyLoop(uint32_t index) = 0;
         virtual uint32_t createSingleShot(const std::string& filePath) = 0;
         virtual void destroySingleShot(uint32_t index) = 0;
+        virtual void setMuted(const bool value) = 0;
     };
 
     struct GameLogicInterface

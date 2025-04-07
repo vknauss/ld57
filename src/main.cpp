@@ -42,6 +42,29 @@ static std::vector<uint32_t> getIndexedTextures(eng::ResourceLoaderInterface& re
     return values;
 }
 
+static void drawText(eng::SceneLayer& layer, const glm::vec2& fontTexCoordScale, const uint32_t fontTexture, const std::string& text, const glm::vec2& position, const float scale, const glm::vec4& background, const glm::vec4& foreground)
+{
+    const float fontAspect = fontTexCoordScale.x / fontTexCoordScale.y;
+    layer.spriteInstances.push_back(eng::SpriteInstance {
+            .position = glm::vec3(position.x + 0.5 * text.size() * fontAspect * scale, -position.y - 0.5 * scale, 0),
+            .scale = 0.5f * scale * glm::vec3(fontAspect * text.size(), 1, 1),
+            .tintColor = background,
+        });
+
+    for (uint32_t i = 0; i < text.size(); ++i)
+    {
+        glm::vec2 minTexCoord = glm::vec2(text[i] / 8, text[i] % 8) * fontTexCoordScale;
+        layer.spriteInstances.push_back(eng::SpriteInstance {
+                .position = glm::vec3(position.x + (i + 0.5) * fontAspect * scale, -position.y - 0.5 * scale, 0),
+                .scale = 0.5f * scale * glm::vec3(fontAspect, 1, 1),
+                .minTexCoord = minTexCoord,
+                .texCoordScale = fontTexCoordScale,
+                .textureIndex = fontTexture,
+                .tintColor = foreground,
+            });
+    }
+}
+
 namespace EnemyAnimationStates
 {
     enum EnemyAnimationStates
@@ -149,7 +172,7 @@ struct GameCommon
     struct {
         uint32_t blank;
         uint32_t blood;
-        uint32_t floor;
+        std::vector<uint32_t> floor;
         uint32_t wall;
         std::vector<uint32_t> bullet;
         std::vector<uint32_t> spiderBullet;
@@ -183,13 +206,14 @@ struct GameCommon
 
     std::vector<Dungeon> dungeons;
     std::vector<std::vector<std::pair<uint32_t, uint32_t>>> dungeonGeometryResourcePairs;
+    const glm::vec2 fontTexCoordScale = { 1.0f / 16.0f, 1.0f / 8.0f };
 
     GameCommon(eng::ResourceLoaderInterface& resourceLoader, eng::InputInterface& input)
     {
         textures = {
             .blank = resourceLoader.loadTexture("resources/textures/blank.png"),
             .blood = resourceLoader.loadTexture("resources/textures/Goop1.png"),
-            .floor = resourceLoader.loadTexture("resources/textures/floor1_floortexrture.png"),
+            .floor = getIndexedTextures(resourceLoader, "resources/textures/floor/FloorTextures{:}.png", 1, numDungeons),
             .wall = resourceLoader.loadTexture("resources/textures/woodWallTexture.png"),
             .bullet = getIndexedTextures(resourceLoader, "resources/textures/pc_projectile/PCProjectile{:}.png", 1, 2),
             .spiderBullet = getIndexedTextures(resourceLoader, "resources/textures/spider/SpiderProjectile{:}.png", 2, 2),
@@ -251,14 +275,14 @@ struct GameCommon
                         .seed = static_cast<uint64_t>(time(0)),
                         .width = 60,
                         .height = 40,
-                        .partitionedRoomCount = 35,
+                        .partitionedRoomCount = 45,
                         .targetRoomCount = 8,
                         .minSplitDimension = 6,
                         .minPortalOverlap = 2,
                     });
             auto geometry = dungeon.createGeometry(3, 1.0f, 0.5f, 2, 1);
             dungeonGeometryResourcePairs.push_back({
-                    { textures.floor, resourceLoader.createGeometry(geometry.floor) },
+                    { textures.floor[i], resourceLoader.createGeometry(geometry.floor) },
                     { textures.wall, resourceLoader.createGeometry(geometry.walls) },
                     { textures.wall, resourceLoader.createGeometry(geometry.obstacleSides) },
                     { textures.wall, resourceLoader.createGeometry(geometry.obstacleTops) },
@@ -285,12 +309,12 @@ struct GameSceneRunner : public JPH::CharacterContactListener
     const int playerMaxHealth = 10;
     const float slideTime = 3.0f;
     const float shootTime = 2.0f;
-    const glm::vec2 fontTexCoordScale = { 1.0f / 16.0f, 1.0f / 8.0f };
     const float fadeOutTime = 3.0f;
     const float fadeInTime = 3.0f;
     const float maxLightIntensity = 1.0f;
     const float maxAmbientLightIntensity = 0.1;
     const float minAmbientLightIntensity = 0.001;
+    const float tutorialTime = 8.0;
 
     std::unique_ptr<fff::PhysicsWorldInterface> physicsWorld;
 
@@ -424,9 +448,26 @@ struct GameSceneRunner : public JPH::CharacterContactListener
             physicsWorld->getPhysicsSystem().GetBodyInterface().DestroyBody(bodyID1);
             bullets.erase(bulletIter);
 
-            if (character == playerCharacter && playerState != PlayerStates::Slide)
+            if (character == playerCharacter)
             {
-                playerState = PlayerStates::Damaged;
+                if (playerState == PlayerStates::Slide)
+                {
+                    ioSettings.mCanPushCharacter = false;
+                }
+                else
+                {
+                    playerState = PlayerStates::Damaged;
+                }
+            }
+        }
+        else if (character == playerCharacter && playerState == PlayerStates::Slide)
+        {
+            if (auto enemyIter = std::find_if(enemies.begin(), enemies.end(),
+                        [bodyID1](const auto& enemy) { return enemy.character->GetBodyID() == bodyID1; });
+                    enemyIter != enemies.end())
+            {
+                enemyIter->state = Enemy::State::Damaged;
+                ioSettings.mCanPushCharacter = false;
             }
         }
     }
@@ -455,7 +496,6 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                         .textureIndex = friendly? common.textures.splat : common.textures.spiderweb,
                     });
             }
-
             else if (auto enemyIter = std::find_if(enemies.begin(), enemies.end(),
                         [body1](const auto& enemy) { return enemy.character->GetBodyID() == body1; });
                     enemyIter != enemies.end())
@@ -468,11 +508,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
     void runFrame(eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio, const double deltaTime)
     {
         animationTimer += deltaTime;
-        while (animationTimer >= 1.0 / animationFPS)
-        {
-            ++animationCounter;
-            animationTimer -= 1.0 / animationFPS;
-        }
+        animationCounter = std::floor(animationTimer * animationFPS);
 
         const auto [windowWidth, windowHeight] = app.getWindowSize();
         const glm::vec2 mouseLookInput = {
@@ -568,9 +604,14 @@ struct GameSceneRunner : public JPH::CharacterContactListener
             if (playerStateTimer > static_cast<float>(common.textures.player[PlayerStates::Damaged].size()) / animationFPS)
             {
                 if (playerHealth > 0)
+                {
+                    std::cout << playerHealth << std::endl;
                     playerState = PlayerStates::Idle;
+                }
                 else
+                {
                     playerState = PlayerStates::Dead;
+                }
             }
         }
         else if (playerState == PlayerStates::Slide)
@@ -1022,31 +1063,9 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         overlayLayer.projection = glm::orthoRH_ZO(-aspectRatio, aspectRatio, -1.0f, 1.0f, -1.0f, 1.0f);
         overlayLayer.ambientLight = glm::vec3(1);
         
-        auto drawText = [&](const std::string& text, const glm::vec2& position, const float scale, const glm::vec4& background, const glm::vec4& foreground)
-        {
-            const float fontAspect = fontTexCoordScale.x / fontTexCoordScale.y;
-            overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
-                    .position = glm::vec3(position.x + 0.5 * text.size() * fontAspect * scale, -position.y - 0.5 * scale, 0),
-                    .scale = 0.5f * scale * glm::vec3(fontAspect * text.size(), 1, 1),
-                    .textureIndex = common.textures.blank,
-                    .tintColor = background,
-                });
-
-            for (uint32_t i = 0; i < text.size(); ++i)
-            {
-                glm::vec2 minTexCoord = glm::vec2(text[i] / 8, text[i] % 8) * fontTexCoordScale;
-                overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
-                        .position = glm::vec3(position.x + (i + 0.5) * fontAspect * scale, -position.y - 0.5 * scale, 0),
-                        .scale = 0.5f * scale * glm::vec3(fontAspect, 1, 1),
-                        .minTexCoord = minTexCoord,
-                        .texCoordScale = fontTexCoordScale,
-                        .textureIndex = common.textures.font,
-                        .tintColor = foreground,
-                    });
-            }
-        };
-
-        drawText((std::stringstream{} << "enemies remaining: " << enemies.size()).str(), glm::vec2(-0.5, -0.875), 0.1, glm::vec4(0, 0, 0, 1), glm::vec4(1, 0, 0, 1));
+        drawText(overlayLayer, common.fontTexCoordScale, common.textures.font,
+                (std::stringstream{} << "enemies remaining: " << enemies.size()).str(),
+                glm::vec2(-0.5, -0.875), 0.1, glm::vec4(0, 0, 0, 1), glm::vec4(1, 0, 0, 1));
 
         const glm::vec2 healthPos(-aspectRatio + 0.1, 0.8);
         const float healthScale = 0.1f;
@@ -1063,8 +1082,16 @@ struct GameSceneRunner : public JPH::CharacterContactListener
 
         if (playerState == PlayerStates::Dazed)
         {
-            drawText((std::stringstream{} << "DUNGEON " << dungeonIndex + 1).str(),
+            drawText(overlayLayer, common.fontTexCoordScale, common.textures.font,
+                    (std::stringstream{} << "DUNGEON " << dungeonIndex + 1).str(),
                     glm::vec2(-1, 0), 0.5, glm::vec4(0), glm::vec4(1, 0, 0, 1-lightIntensity/maxLightIntensity));
+        }
+
+        if (dungeonIndex == 0 && animationTimer < tutorialTime)
+        {
+            drawText(overlayLayer, common.fontTexCoordScale, common.textures.font,
+                    "[WASD] Move | [Space] Slide | [Left Mouse] Shoot",
+                    glm::vec2(-1, 0.6), 0.1, glm::vec4(0), glm::vec4(1, 0, 0, std::min<float>(1, 2-2*animationTimer/tutorialTime)));
         }
     }
 };
@@ -1079,6 +1106,13 @@ struct GameLogic final: eng::GameLogicInterface
     std::vector<uint32_t> anyActionInputs;
     bool lastPressed = false;
     uint32_t themeLoop;
+
+    struct
+    {
+        uint32_t fullscreenToggle;
+        uint32_t muteToggle;
+        uint32_t quit;
+    } inputs;
 
     struct Screens
     {
@@ -1097,6 +1131,8 @@ struct GameLogic final: eng::GameLogicInterface
     const uint32_t animationFPS = 8;
     uint32_t animationCounter = 0;
     double animationTimer = 0;
+    bool muted = false;
+    bool fullscreen = false;
 
     void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio) override
     {
@@ -1104,9 +1140,15 @@ struct GameLogic final: eng::GameLogicInterface
 
         common.reset(new GameCommon(resourceLoader, input));
         anyActionInputs = {
-            input.mapAnyKey(input.createMapping()),
+            // input.mapAnyKey(input.createMapping()),
             input.mapAnyMouseButton(input.createMapping()),
             input.mapAnyGamepadButton(input.createMapping()),
+        };
+
+        inputs = {
+            .fullscreenToggle = input.mapKey(input.createMapping(), SDL_GetScancodeFromKey(SDLK_F, nullptr), eng::InputInterface::BoolStateEvent::Pressed),
+            .muteToggle = input.mapKey(input.createMapping(), SDL_GetScancodeFromKey(SDLK_M, nullptr), eng::InputInterface::BoolStateEvent::Pressed),
+            .quit = input.mapKey(input.createMapping(), SDL_GetScancodeFromKey(SDLK_ESCAPE, nullptr), eng::InputInterface::BoolStateEvent::Pressed),
         };
 
         screens[Screens::Title] = { resourceLoader.loadTexture("resources/textures/title.png") };
@@ -1117,10 +1159,17 @@ struct GameLogic final: eng::GameLogicInterface
     void runFrame(eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio, const double deltaTime) override
     {
         animationTimer += deltaTime;
-        while (animationTimer >= 1.0 / animationFPS)
+        animationCounter = std::floor(animationTimer * animationFPS);
+
+        if (input.getBoolean(inputs.fullscreenToggle))
         {
-            ++animationCounter;
-            animationTimer -= 1.0 / animationFPS;
+            fullscreen = !fullscreen;
+            app.setWantsFullscreen(fullscreen);
+        }
+        if (input.getBoolean(inputs.muteToggle))
+        {
+            muted = !muted;
+            audio.setMuted(muted);
         }
 
         if (sceneRunner)
@@ -1159,25 +1208,46 @@ struct GameLogic final: eng::GameLogicInterface
                 animationCounter = 0;
                 animationTimer = 0;
             }
+
+            if (input.getBoolean(inputs.quit))
+            {
+                audio.destroyLoop(themeLoop);
+                themeLoop = audio.createLoop("resources/audio/GasStationThemereal.wav");
+                currentDungeon = 0;
+                sceneRunner.reset();
+                currentScreen = Screens::Title;
+                animationCounter = 0;
+                animationTimer = 0;
+            }
         }
         else
         {
-            bool pressed = std::reduce(anyActionInputs.begin(), anyActionInputs.end(), false,
-                    [&](const bool state, const uint32_t mapping) { return state || input.getBoolean(mapping); });
-            if (pressed && !lastPressed)
+            app.setWantsCursorLock(false);
+
+            if (currentScreen == Screens::Title && input.getBoolean(inputs.quit))
             {
-                if (currentScreen == Screens::Title)
-                {
-                    sceneRunner.reset(new GameSceneRunner(*common, currentDungeon++));
-                }
-                else
-                {
-                    currentScreen = Screens::Title;
-                    animationCounter = 0;
-                    animationTimer = 0;
-                }
+                app.requestQuit();
             }
-            lastPressed = pressed;
+            else
+            {
+                bool pressed = std::reduce(anyActionInputs.begin(), anyActionInputs.end(), false,
+                        [&](const bool state, const uint32_t mapping) { return state || input.getBoolean(mapping); });
+                if (pressed && !lastPressed)
+                {
+                    if (currentScreen == Screens::Title)
+                    {
+                        sceneRunner.reset(new GameSceneRunner(*common, currentDungeon++));
+                        app.setWantsCursorLock(true);
+                    }
+                    else
+                    {
+                        currentScreen = Screens::Title;
+                        animationCounter = 0;
+                        animationTimer = 0;
+                    }
+                }
+                lastPressed = pressed;
+            }
 
             const auto [framebufferWidth, framebufferHeight] = scene.framebufferSize();
             const float aspectRatio = static_cast<float>(framebufferWidth) / static_cast<float>(framebufferHeight);
@@ -1197,6 +1267,13 @@ struct GameLogic final: eng::GameLogicInterface
             layer.spriteInstances.push_back(eng::SpriteInstance {
                         .textureIndex = screens[currentScreen][animationCounter % screens[currentScreen].size()],
                     });
+
+            if (currentScreen == Screens::Title)
+            {
+                drawText(layer, common->fontTexCoordScale, common->textures.font,
+                        "[Esc] Quit | [M] Toggle Mute | [F] Toggle Fullscreen",
+                        glm::vec2(-1, 0.875), 0.1, glm::vec4(0, 0, 0, 1), glm::vec4(1, 0, 0, 1));
+            }
         }
     }
 
@@ -1210,9 +1287,9 @@ struct GameLogic final: eng::GameLogicInterface
 eng::ApplicationInfo EngineApp_GetApplicationInfo()
 {
     return eng::ApplicationInfo {
-        .appName = "game",
+        .appName = "xterminator",
         .appVersion = 0,
-        .windowTitle = "Ludum Dare 57",
+        .windowTitle = "XTerminator",
         .windowWidth = 1920,
         .windowHeight = 1080,
     };
