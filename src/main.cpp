@@ -42,6 +42,17 @@ static std::vector<uint32_t> getIndexedTextures(eng::ResourceLoaderInterface& re
     return values;
 }
 
+namespace EnemyAnimationStates
+{
+    enum EnemyAnimationStates
+    {
+        Walk,
+        Shooting,
+        Damage,
+        MAX_VALUE,
+    };
+};
+
 struct Enemy
 {
     enum class State
@@ -49,7 +60,6 @@ struct Enemy
         Initial, Idle, Damaged, Pursuing, Targeting, Firing, Dead,
     };
 
-    // uint32_t sprite = 0;
     glm::vec3 position = glm::vec3(0);
     float angle = 0;
     glm::vec2 extents = glm::vec3(0.5);
@@ -60,19 +70,25 @@ struct Enemy
     int maxHealth = 5;
     glm::vec3 poi;
     JPH::Ref<JPH::Character> character;
+    int animationState = EnemyAnimationStates::Walk;
+    uint32_t animationOffset = 0;
+    bool loopAnimation = true;
 };
+
 
 namespace PlayerStates
 {
     enum PlayerStates
     {
-        Initial,
         Idle,
         Walk,
         Slide,
         Damaged,
         Shooting,
         Dead,
+        FallingInHole,
+        FallenInHole,
+        Dazed,
         MAX_VALUE,
     };
 };
@@ -138,10 +154,12 @@ struct GameCommon
         std::vector<uint32_t> bullet;
         std::vector<uint32_t> spiderBullet;
         uint32_t splat;
+        uint32_t spiderweb;
         uint32_t font;
         std::vector<uint32_t> player[PlayerStates::MAX_VALUE];
-        std::vector<uint32_t> spiderWalk;
-        std::vector<uint32_t> spiderShoot;
+        std::vector<uint32_t> spider[EnemyAnimationStates::MAX_VALUE];
+        std::vector<uint32_t> hole;
+        std::vector<uint32_t> muzzleFlash;
     } textures;
 
     struct {
@@ -168,12 +186,15 @@ struct GameCommon
     {
         textures = {
             .blank = resourceLoader.loadTexture("resources/textures/blank.png"),
-            .blood = resourceLoader.loadTexture("resources/textures/blood.png"),
+            .blood = resourceLoader.loadTexture("resources/textures/Goop1.png"),
             .floor = resourceLoader.loadTexture("resources/textures/floor1_floortexrture.png"),
             .bullet = getIndexedTextures(resourceLoader, "resources/textures/pc_projectile/PCProjectile{:}.png", 1, 2),
             .spiderBullet = getIndexedTextures(resourceLoader, "resources/textures/spider/SpiderProjectile{:}.png", 2, 2),
-            .splat = resourceLoader.loadTexture("resources/textures/splat.png"),
+            .splat = resourceLoader.loadTexture("resources/textures/Goop2.png"),
+            .spiderweb = resourceLoader.loadTexture("resources/textures/Spiderweb.png"),
             .font = resourceLoader.loadTexture("resources/textures/font.png"),
+            .hole = getIndexedTextures(resourceLoader, "resources/textures/hole/FloorFallingThruAnim{:}.png", 1, 8),
+            .muzzleFlash = getIndexedTextures(resourceLoader, "resources/textures/muzzleflash/PCMuzzleFlash{:}.png", 1, 2),
         };
 
         for (uint32_t i = 0; i < PlayerStates::MAX_VALUE; ++i)
@@ -188,7 +209,12 @@ struct GameCommon
                 default: break;
             }
         }
-        textures.spiderWalk = getIndexedTextures(resourceLoader, "resources/textures/spider/SpiderEnemyWalk{:}.png", 2, 3);
+        textures.player[PlayerStates::FallingInHole] = textures.player[PlayerStates::Idle];
+        textures.player[PlayerStates::Dazed] = textures.player[PlayerStates::Slide];
+
+        textures.spider[EnemyAnimationStates::Walk] = getIndexedTextures(resourceLoader, "resources/textures/spider/SpiderEnemyWalk{:}.png", 2, 3);
+        textures.spider[EnemyAnimationStates::Shooting] = getIndexedTextures(resourceLoader, "resources/textures/spider/SpiderShooting{:}.png", 1, 3);
+        textures.spider[EnemyAnimationStates::Damage] = getIndexedTextures(resourceLoader, "resources/textures/spider/SpiderDamage{:}.png", 1, 2);
 
         inputMappings = {
             .left = input.mapKey(input.createMapping(), SDL_GetScancodeFromKey(SDLK_A, nullptr)),
@@ -221,7 +247,7 @@ struct GameCommon
                         .width = 60,
                         .height = 40,
                         .partitionedRoomCount = 35,
-                        .targetRoomCount = 12,
+                        .targetRoomCount = 4,
                         .minSplitDimension = 6,
                         .minPortalOverlap = 2,
                     });
@@ -245,11 +271,15 @@ struct GameSceneRunner : public JPH::CharacterContactListener
     const glm::vec3 bulletOrigin = glm::vec3(0.0625, 0, -0.5);
     const float bulletSpeed = 20.0f;
     const float bulletRadius = 0.05f;
-    const float enemyDamageCooldown = 0.6f;
     const int playerMaxHealth = 10;
     const float slideTime = 3.0f;
     const float shootTime = 2.0f;
     const glm::vec2 fontTexCoordScale = { 1.0f / 16.0f, 1.0f / 8.0f };
+    const float fadeOutTime = 3.0f;
+    const float fadeInTime = 3.0f;
+    const float maxLightIntensity = 1.0f;
+    const float maxAmbientLightIntensity = 0.1;
+    const float minAmbientLightIntensity = 0.001;
 
     std::unique_ptr<fff::PhysicsWorldInterface> physicsWorld;
 
@@ -259,7 +289,6 @@ struct GameSceneRunner : public JPH::CharacterContactListener
     JPH::Ref<JPH::Shape> characterShape;
 
     std::vector<Enemy> enemies;
-    std::vector<eng::Light> lights;
     std::vector<eng::Decal> decals;
     std::vector<Bullet> bullets;
 
@@ -268,15 +297,19 @@ struct GameSceneRunner : public JPH::CharacterContactListener
 
     glm::vec3 cameraPosition = { 0, 2, 0 };
     float playerAngle = 0;
-    PlayerStates::PlayerStates playerState = PlayerStates::Idle;
-    PlayerStates::PlayerStates lastPlayerState = PlayerStates::Initial;
+    PlayerStates::PlayerStates playerState = PlayerStates::Dazed;
+    PlayerStates::PlayerStates lastPlayerState = PlayerStates::MAX_VALUE;
     float playerStateTimer = 0;
+    uint32_t playerStateAnimationOffset = 0;
     glm::vec3 playerSlideVelocity = glm::vec3(0);
 
     CooldownTrigger shootTrigger;
     CooldownTrigger slideTrigger;
 
     int playerHealth = playerMaxHealth;
+    uint32_t holeAnimationOffset = 0;
+    float lightIntensity = 0;
+    float ambientLightIntensity = minAmbientLightIntensity;
 
     enum class State
     {
@@ -413,6 +446,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                     [body0](const auto& bullet) { return bullet.bodyID == body0; });
                 bulletIter != bullets.end())
         {
+            const bool friendly = bulletIter->friendly;
             physicsWorld->getPhysicsSystem().GetBodyInterface().RemoveBody(body0);
             physicsWorld->getPhysicsSystem().GetBodyInterface().DestroyBody(body0);
             bullets.erase(bulletIter);
@@ -426,7 +460,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                         .position = jph_to_glm(first ? contact.GetWorldSpaceContactPointOn2(0) : contact.GetWorldSpaceContactPointOn1(0)),
                         .scale = glm::vec3(1, 1, 0.05),
                         .rotation = glm::rotation(glm::vec3(0, 0, -1), jph_to_glm(contact.mWorldSpaceNormal)) * glm::angleAxis(glm::linearRand(0.0f, glm::pi<float>()), glm::vec3(0, 0, 1)),
-                        .textureIndex = common.textures.splat,
+                        .textureIndex = friendly? common.textures.splat : common.textures.spiderweb,
                     });
             }
 
@@ -526,9 +560,14 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                 state = State::GameOver;
                 return;
             }
+            else if (playerState == PlayerStates::FallingInHole)
+            {
+                holeAnimationOffset = animationCounter;
+            }
 
             lastPlayerState = playerState;
             playerStateTimer = 0;
+            playerStateAnimationOffset = animationCounter;
         }
 
         if (playerState == PlayerStates::Damaged)
@@ -551,6 +590,34 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         else if (playerState == PlayerStates::Shooting)
         {
             if (playerStateTimer > shootTime / animationFPS)
+            {
+                playerState = PlayerStates::Idle;
+            }
+        }
+        else if (playerState == PlayerStates::FallingInHole)
+        {
+            if (animationCounter - holeAnimationOffset >= common.textures.hole.size())
+            {
+                playerState = PlayerStates::FallenInHole;
+            }
+        }
+        else if (playerState == PlayerStates::FallenInHole)
+        {
+            lightIntensity = std::max(maxLightIntensity * (1.0f - playerStateTimer / fadeOutTime), 0.0f);
+            ambientLightIntensity = std::max(minAmbientLightIntensity + (maxAmbientLightIntensity - minAmbientLightIntensity) * (1.0f - playerStateTimer / fadeOutTime),
+                    minAmbientLightIntensity);
+            if (playerStateTimer >= fadeOutTime)
+            {
+                state = State::Completed;
+                return;
+            }
+        }
+        else if (playerState == PlayerStates::Dazed)
+        {
+            lightIntensity = std::min(maxLightIntensity * (playerStateTimer / fadeInTime), maxLightIntensity);
+            ambientLightIntensity = std::min(minAmbientLightIntensity + (maxAmbientLightIntensity - minAmbientLightIntensity) * (playerStateTimer / fadeOutTime),
+                    maxAmbientLightIntensity);
+            if (playerStateTimer >= fadeInTime)
             {
                 playerState = PlayerStates::Idle;
             }
@@ -700,8 +767,25 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                     enemy.character->RemoveFromPhysicsSystem();
                 }
 
-                enemy.lastState = enemy.state;
                 enemy.stateTime = 0;
+                enemy.lastState = enemy.state;
+                if (enemy.state == Enemy::State::Damaged)
+                {
+                    enemy.animationState = EnemyAnimationStates::Damage;
+                    enemy.loopAnimation = false;
+                    enemy.animationOffset = animationCounter;
+                }
+                else if (enemy.state == Enemy::State::Targeting)
+                {
+                    enemy.animationState = EnemyAnimationStates::Shooting;
+                    enemy.loopAnimation = false;
+                    enemy.animationOffset = animationCounter;
+                }
+                else
+                {
+                    enemy.animationState = EnemyAnimationStates::Walk;
+                    enemy.loopAnimation = true;
+                }
             }
 
             if (enemy.state == Enemy::State::Idle)
@@ -723,9 +807,12 @@ struct GameSceneRunner : public JPH::CharacterContactListener
             }
             else if (enemy.state == Enemy::State::Damaged)
             {
-                if (enemy.stateTime >= enemyDamageCooldown)
+                if (enemy.stateTime >= static_cast<float>(common.textures.spider[EnemyAnimationStates::Damage].size()) / animationFPS)
                 {
-                    enemy.state = Enemy::State::Idle;
+                    if (enemy.health > 0)
+                        enemy.state = Enemy::State::Idle;
+                    else
+                        enemy.state = Enemy::State::Dead;
                 }
             }
             else if (enemy.state == Enemy::State::Targeting)
@@ -749,16 +836,35 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                 }
             }
 
-            if (enemy.health <= 0)
-            {
-                enemy.state = Enemy::State::Dead;
-            }
-
             enemy.stateTime += deltaTime;
+
+            if (enemy.lastState != enemy.state)
+            {
+                enemy.stateTime = 0;
+                if (enemy.state == Enemy::State::Damaged)
+                {
+                    enemy.animationState = EnemyAnimationStates::Damage;
+                    enemy.loopAnimation = false;
+                    enemy.animationOffset = animationCounter;
+                }
+                else if (enemy.state == Enemy::State::Targeting)
+                {
+                    enemy.animationState = EnemyAnimationStates::Shooting;
+                    enemy.loopAnimation = false;
+                    enemy.animationOffset = animationCounter;
+                }
+                else
+                {
+                    enemy.animationState = EnemyAnimationStates::Walk;
+                    enemy.loopAnimation = true;
+                }
+            }
         }
 
-        std::erase_if(enemies, [](const auto& enemy){ return enemy.lastState == Enemy::State::Dead; });
-        if (enemies.empty()) state = State::Completed;
+        if (std::erase_if(enemies, [](const auto& enemy){ return enemy.lastState == Enemy::State::Dead; }) && enemies.empty())
+        {
+            playerState = PlayerStates::FallingInHole;
+        }
 
         physicsWorld->update(deltaTime);
 
@@ -783,6 +889,12 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         physicsWorld->updateCharacter(*playerCharacter, deltaTime);
 
         cameraPosition = jph_to_glm(playerCharacter->GetPosition()) + glm::vec3(0, 5, 0);
+
+        if (lastPlayerState != playerState)
+        {
+            playerStateTimer = 0;
+            playerStateAnimationOffset = animationCounter;
+        }
     }
 
     void render(eng::SceneInterface& scene)
@@ -800,8 +912,8 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         sceneLayer.viewport = { .offset = { 0, framebufferHeight }, .extent = { framebufferWidth, -static_cast<float>(framebufferHeight) } };
         sceneLayer.scissor = { .extent = { framebufferWidth, framebufferHeight } };
         sceneLayer.projection = glm::perspectiveRH_ZO(0.25f * glm::pi<float>(), aspectRatio, 0.1f, 100.f);
-        sceneLayer.lights.assign(lights.begin(), lights.end());
-        sceneLayer.ambientLight = glm::vec3(0.1);
+        sceneLayer.ambientLight = glm::vec3(ambientLightIntensity);
+        sceneLayer.lights.clear();
 
         sceneLayer.geometryInstances.push_back(eng::GeometryInstance {
                     .textureIndex = common.textures.floor,
@@ -815,13 +927,19 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         {
             const auto& enemy = enemies[i];
 
-            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
-                        .position = enemy.position,
-                        .scale = glm::vec3(0.5),
-                        .angle = enemy.angle,
-                        .textureIndex = common.textures.spiderWalk[animationCounter % common.textures.spiderWalk.size()],
-                        .tintColor = enemy.state == Enemy::State::Damaged ? glm::vec4(1.0, 0.5, 0.5, 1.0) : glm::vec4(1.0),
-                    });
+            const auto& frames = common.textures.spider[enemy.animationState];
+            if (!frames.empty())
+            {
+                uint32_t frame = animationCounter - enemy.animationOffset;
+                frame = enemy.loopAnimation ? frame % frames.size() : std::min<uint32_t>(frame, frames.size() - 1);
+                sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
+                            .position = enemy.position,
+                            .scale = glm::vec3(0.5),
+                            .angle = enemy.angle,
+                            .textureIndex = frames[frame],
+                            // .tintColor = enemy.state == Enemy::State::Damaged ? glm::vec4(1.0, 0.5, 0.5, 1.0) : glm::vec4(1.0),
+                        });
+            }
 
             sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
                         .position = enemy.position + glm::vec3(0, 0, 0.3f),
@@ -831,6 +949,14 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                     });
         }
 
+        if (lastPlayerState == PlayerStates::FallingInHole || lastPlayerState == PlayerStates::FallenInHole)
+        {
+            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
+                        .position = jph_to_glm(playerCharacter->GetPosition()),
+                        .scale = glm::vec3(0.5),
+                        .textureIndex = common.textures.hole[std::min<uint32_t>(animationCounter - holeAnimationOffset, common.textures.hole.size()-1)],
+                    });
+        }
         if (!common.textures.player[playerState].empty())
             sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
                         .position = jph_to_glm(playerCharacter->GetPosition()),
@@ -838,6 +964,19 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                         .angle = playerAngle,
                         .textureIndex = common.textures.player[playerState][animationCounter % common.textures.player[playerState].size()],
                     });
+        if (playerState == PlayerStates::Shooting)
+        {
+            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
+                        .position = jph_to_glm(playerCharacter->GetPosition()) + glm::angleAxis(playerAngle, glm::vec3(0, 1, 0)) * bulletOrigin,
+                        .scale = glm::vec3(0.5),
+                        .angle = playerAngle,
+                        .textureIndex = common.textures.muzzleFlash[std::min<uint32_t>(animationCounter - playerStateAnimationOffset, common.textures.muzzleFlash.size() - 1)],
+                    });
+            sceneLayer.lights.push_back(eng::Light {
+                        .position = jph_to_glm(playerCharacter->GetPosition()) + glm::angleAxis(playerAngle, glm::vec3(0, 1, 0)) * bulletOrigin,
+                        .intensity = glm::vec3(0, 0.5, 0.2),
+                    });
+        }
 
         for (const auto& bullet : bullets)
         {
@@ -852,7 +991,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
 
         sceneLayer.lights.push_back(eng::Light {
                     .position = jph_to_glm(playerCharacter->GetPosition()) + glm::angleAxis(playerAngle, glm::vec3(0, 1, 0)) * glm::vec3(0.25, 1, 0),
-                    .intensity = glm::vec3(1),
+                    .intensity = glm::vec3(lightIntensity),
                 });
 
         auto& overlayLayer = scene.layers()[1];
@@ -903,7 +1042,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
     }
 };
 
-struct GameLogic final : eng::GameLogicInterface
+struct GameLogic final: eng::GameLogicInterface
 {
     const int numDungeons = 3;
     int currentDungeon = 0;
@@ -911,11 +1050,11 @@ struct GameLogic final : eng::GameLogicInterface
     std::unique_ptr<GameSceneRunner> sceneRunner;
 
     std::vector<uint32_t> anyActionInputs;
-    uint32_t titleThemeAudio;
+    uint32_t themeLoop;
 
     void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio) override
     {
-        titleThemeAudio = audio.createLoop("resources/audio/GasStationThemereal.wav");
+        themeLoop = audio.createLoop("resources/audio/GasStationThemereal.wav");
 
         common.reset(new GameCommon(resourceLoader, input));
         anyActionInputs = {
@@ -936,18 +1075,24 @@ struct GameLogic final : eng::GameLogicInterface
             }
             else if (sceneRunner->state == GameSceneRunner::State::Completed)
             {
+                audio.destroyLoop(themeLoop);
                 if (currentDungeon < numDungeons)
                 {
+                    if (currentDungeon == 1) themeLoop = audio.createLoop("resources/audio/loop1real.wav");
+                    if (currentDungeon == 2) themeLoop = audio.createLoop("resources/audio/loop2real.wav");
                     sceneRunner.reset(new GameSceneRunner(*common, currentDungeon++));
                 }
                 else
                 {
+                    themeLoop = audio.createLoop("resources/audio/GasStationThemereal.wav");
                     currentDungeon = 0;
                     sceneRunner.reset();
                 }
             }
             else if (sceneRunner->state == GameSceneRunner::State::GameOver)
             {
+                audio.destroyLoop(themeLoop);
+                themeLoop = audio.createLoop("resources/audio/GasStationThemereal.wav");
                 currentDungeon = 0;
                 sceneRunner.reset();
             }
