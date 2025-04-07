@@ -315,6 +315,16 @@ struct PhysicsWorld final :
     {
         onCollisionExit = fn;
     }
+
+    std::vector<std::pair<JPH::SubShapeIDPair, JPH::ContactManifold>> getContacts(const JPH::BodyID body0, const JPH::BodyID body1) const override
+    {
+        auto pair = contactListener.FindPair(body0, body1);
+        if (pair)
+        {
+            return pair->contacts;
+        }
+        return {};
+    }
 };
 
 fff::PhysicsWorldInterface* fff::createPhysicsWorld()

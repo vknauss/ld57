@@ -95,6 +95,8 @@ struct GameLogic final : eng::GameLogicInterface
         uint32_t rat;
         uint32_t floor;
         uint32_t bullet;
+        uint32_t splat;
+        uint32_t font;
         std::vector<uint32_t> player[PlayerStates::MAX_VALUE];
         std::vector<uint32_t> spiderWalk;
     } textures;
@@ -127,6 +129,8 @@ struct GameLogic final : eng::GameLogicInterface
     const float bulletSpeed = 20.0f;
     const float bulletRadius = 0.05f;
 
+    const glm::vec2 fontTexCoordScale = { 1.0f / 16.0f, 1.0f / 8.0f };
+
     std::unique_ptr<fff::PhysicsWorldInterface> physicsWorld;
 
     std::vector<JPH::Ref<JPH::Shape>> shapeRefs;
@@ -147,6 +151,8 @@ struct GameLogic final : eng::GameLogicInterface
     float shootTimer = 0;
     bool shootButtonPressed = false;
     bool shootNext = false;
+
+    std::string text = "X-Terminator 5000";
 
     ~GameLogic()
     {
@@ -178,8 +184,10 @@ struct GameLogic final : eng::GameLogicInterface
         playerCharacter->SetLinearVelocity(glm_to_jph(movementSpeed * direction + glm::vec3(0, velocity.y, 0)));
     }
 
-    void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app) override
+    void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio) override
     {
+        audio.createLoop("resources/audio/GasStationTheme.wav");
+
         physicsWorld.reset(fff::createPhysicsWorld());
         // physicsWorld->getPhysicsSystem().SetGravity(JPH::Vec3(0, 0, 0));
         //
@@ -187,9 +195,21 @@ struct GameLogic final : eng::GameLogicInterface
                     auto it = std::find_if(bullets.begin(), bullets.end(), [body0](const auto& bullet) { return bullet.bodyID == body0; });
                     if (it != bullets.end())
                     {
+                        auto position = physicsWorld->getPhysicsSystem().GetBodyInterface().GetPosition(body0);
+
                         physicsWorld->getPhysicsSystem().GetBodyInterface().RemoveBody(body0);
                         physicsWorld->getPhysicsSystem().GetBodyInterface().DestroyBody(body0);
                         bullets.erase(it);
+
+                        const auto [ idPair, contact ] = physicsWorld->getContacts(body0, body1).front();
+                        bool first = idPair.GetBody1ID() == body0;
+
+                        bloodDecals.push_back(eng::Decal {
+                                .position = jph_to_glm(first ? contact.GetWorldSpaceContactPointOn2(0) : contact.GetWorldSpaceContactPointOn1(0)),
+                                .scale = glm::vec3(1, 1, 0.05),
+                                .rotation = glm::rotation(glm::vec3(0, 0, -1), jph_to_glm(contact.mWorldSpaceNormal)) * glm::angleAxis(glm::linearRand(0.0f, glm::pi<float>()), glm::vec3(0, 0, 1)),
+                                .textureIndex = textures.splat,
+                            });
                     }
                 });
 
@@ -202,6 +222,8 @@ struct GameLogic final : eng::GameLogicInterface
             .rat = resourceLoader.loadTexture("resources/textures/rat.png"),
             .floor = resourceLoader.loadTexture("resources/textures/floor1_floortexrture.png"),
             .bullet = resourceLoader.loadTexture("resources/textures/bullet.png"),
+            .splat = resourceLoader.loadTexture("resources/textures/splat.png"),
+            .font = resourceLoader.loadTexture("resources/textures/font.png"),
         };
 
         for (uint32_t i = 0; i < PlayerStates::MAX_VALUE; ++i)
@@ -390,27 +412,41 @@ struct GameLogic final : eng::GameLogicInterface
                     });
         }
 
-        sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
-                    .position = jph_to_glm(playerCharacter->GetPosition()) + glm::angleAxis(playerAngle, glm::vec3(0, 1, 0)) * bulletOrigin,
-                    .scale = glm::vec3(bulletRadius),
-                    .angle = playerAngle,
-                    .textureIndex = textures.blank,
-                    .tintColor = glm::vec4(1, 0, 0, 1),
-                });
-
         sceneLayer.lights.push_back(eng::Light {
                     .position = jph_to_glm(playerCharacter->GetPosition()) + glm::angleAxis(playerAngle, glm::vec3(0, 1, 0)) * glm::vec3(0.25, 1, 0),
                     .intensity = glm::vec3(5),
                 });
 
-        /* auto& overlayLayer = scene.layers()[1];
+        auto& overlayLayer = scene.layers()[1];
         overlayLayer.spriteInstances.clear();
         overlayLayer.geometryInstances.clear();
         overlayLayer.overlaySpriteInstances.clear();
         overlayLayer.viewport = { .offset = { 0, framebufferHeight }, .extent = { framebufferWidth, -static_cast<float>(framebufferHeight) } };
         overlayLayer.scissor = { .extent = { framebufferWidth, framebufferHeight } };
         overlayLayer.projection = glm::orthoRH_ZO(-aspectRatio, aspectRatio, -1.0f, 1.0f, -1.0f, 1.0f);
-        overlayLayer.ambientLight = glm::vec3(1); */
+        overlayLayer.ambientLight = glm::vec3(1);
+        
+        const glm::vec2 textPos(-0.5, -0.875);
+        const float textScale = 0.1;
+        const float fontAspect = fontTexCoordScale.x / fontTexCoordScale.y;
+        overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
+                .position = glm::vec3(textPos.x + 0.5 * text.size() * fontAspect * textScale, -textPos.y - 0.5 * textScale, 0),
+                .scale = 0.5f * textScale * glm::vec3(fontAspect * text.size(), 1, 1),
+                .textureIndex = textures.blank,
+                .tintColor = glm::vec4(0, 0, 0, 1),
+            });
+        for (uint32_t i = 0; i < text.size(); ++i)
+        {
+            glm::vec2 minTexCoord = glm::vec2(text[i] / 8, text[i] % 8) * fontTexCoordScale;
+            overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
+                    .position = glm::vec3(textPos.x + (i + 0.5) * fontAspect * textScale, -textPos.y - 0.5 * textScale, 0),
+                    .scale = 0.5f * textScale * glm::vec3(fontAspect, 1, 1),
+                    .minTexCoord = minTexCoord,
+                    .texCoordScale = fontTexCoordScale,
+                    .textureIndex = textures.font,
+                    .tintColor = glm::vec4(1, 0, 0, 1),
+                });
+        }
     }
 
     void enemyUpdateDamaged(Enemy& enemy, const float deltaTime)
@@ -421,7 +457,7 @@ struct GameLogic final : eng::GameLogicInterface
         }
     }
 
-    void runFrame(eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, const double deltaTime) override
+    void runFrame(eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio, const double deltaTime) override
     {
         animationTimer += deltaTime;
         while (animationTimer >= 1.0 / animationFPS)

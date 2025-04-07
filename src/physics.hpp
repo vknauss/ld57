@@ -1,10 +1,14 @@
 #pragma once
 
+#include <vector>
+
 namespace JPH
 {
     class CharacterVirtual;
     class PhysicsSystem;
     class BodyID;
+    class SubShapeIDPair;
+    class ContactManifold;
 }
 
 namespace std
@@ -26,6 +30,8 @@ namespace fff
 
         virtual void setOnCollisionEnter(const std::function<void(JPH::BodyID, JPH::BodyID)> &fn) = 0;
         virtual void setOnCollisionExit(const std::function<void(JPH::BodyID, JPH::BodyID)> &fn) = 0;
+
+        virtual std::vector<std::pair<JPH::SubShapeIDPair, JPH::ContactManifold>> getContacts(const JPH::BodyID body0, const JPH::BodyID body1) const = 0;
     };
 
     PhysicsWorldInterface* createPhysicsWorld();

@@ -132,6 +132,14 @@ namespace eng
         virtual std::pair<uint32_t, uint32_t> getWindowSize() const = 0;
     };
 
+    struct AudioInterface
+    {
+        virtual uint32_t createLoop(const std::string& filePath) = 0;
+        virtual void destroyLoop(uint32_t index) = 0;
+        virtual uint32_t createSingleShot(const std::string& filePath) = 0;
+        virtual void destroySingleShot(uint32_t index) = 0;
+    };
+
     struct GameLogicInterface
     {
         virtual ~GameLogicInterface() = default;
@@ -139,10 +147,12 @@ namespace eng
         virtual void init(ResourceLoaderInterface& resourceLoader,
                 SceneInterface& scene,
                 InputInterface& input,
-                AppInterface& app) = 0;
+                AppInterface& app,
+                AudioInterface& audio) = 0;
         virtual void runFrame(SceneInterface& scene,
                 InputInterface& input,
                 AppInterface& app,
+                AudioInterface& audio,
                 const double deltaTime) = 0;
         virtual void cleanup() = 0;
     };

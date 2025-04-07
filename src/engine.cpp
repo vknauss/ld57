@@ -22,6 +22,7 @@
 #include <glm/glm.hpp>
 #include <iostream>
 #include <optional>
+#include <queue>
 #include <stdexcept>
 #include <sstream>
 #include <vector>
@@ -140,19 +141,165 @@ struct SDLWindowSurfaceWrapper
     }
 };
 
-struct Audio
+struct Audio final : eng::AudioInterface
 {
-    SDL_AudioStream* audioStream;
-
-    Audio()
+    struct Sound
     {
-        audioStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, nullptr, nullptr, nullptr);
-        SDL_ResumeAudioStreamDevice(audioStream);
+        uint8_t* pcm = nullptr;
+        uint32_t length = 0;
+        SDL_AudioStream* stream = nullptr;
+
+        Sound() = default;
+
+        Sound(Sound&& s) :
+            pcm(s.pcm),
+            length(s.length),
+            stream(s.stream)
+        {
+            s.pcm = nullptr;
+            s.length = 0;
+            s.stream = nullptr;
+        }
+
+        Sound(Sound&) = delete;
+
+        ~Sound()
+        {
+            SDL_DestroyAudioStream(stream);
+            SDL_free(pcm);
+        }
+
+        Sound& operator=(Sound&& s)
+        {
+            SDL_DestroyAudioStream(stream);
+            SDL_free(pcm);
+            pcm = s.pcm;
+            length = s.length;
+            stream = s.stream;
+            s.pcm = nullptr;
+            s.length = 0;
+            s.stream = nullptr;
+            return *this;
+        }
+
+        Sound& operator=(Sound& s) = delete;
+    };
+
+    SDL_AudioDeviceID device;
+    std::vector<Sound> loops;
+    std::vector<Sound> singleShot;
+    std::queue<uint32_t> freeLoopIndices;
+    std::queue<uint32_t> freeSingleShotIndices;
+
+    Audio() :
+        device(SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, nullptr))
+    {
+        if (!device)
+        {
+            throw std::runtime_error((std::stringstream{} << "failed to open audio playback device: " << SDL_GetError()).str());
+        }
     }
 
     ~Audio()
     {
-        SDL_DestroyAudioStream(audioStream);
+        SDL_CloseAudioDevice(device);
+    }
+
+    uint32_t createSound(const std::string& filePath, std::vector<Sound>& sounds, std::queue<uint32_t>& freeIndices)
+    {
+        Sound sound;
+        SDL_AudioSpec audioSpec;
+        if (!SDL_LoadWAV(filePath.c_str(), &audioSpec, &sound.pcm, &sound.length))
+        {
+            throw std::runtime_error((std::stringstream{} << "failed to load audio from path: " << filePath << ": " << SDL_GetError()).str());
+        }
+
+        sound.stream = SDL_CreateAudioStream(&audioSpec, nullptr);
+        if (!sound.stream)
+        {
+            throw std::runtime_error((std::stringstream{} << "failed to create audio stream: " << SDL_GetError()).str());
+        }
+
+        if (!SDL_BindAudioStream(device, sound.stream))
+        {
+            throw std::runtime_error((std::stringstream{} << "failed to bind audio stream for playback: " << SDL_GetError()).str());
+        }
+
+        if (!SDL_PutAudioStreamData(sound.stream, sound.pcm, sound.length))
+        {
+            throw std::runtime_error((std::stringstream{} << "failed to send audio stream data: " << SDL_GetError()).str());
+        }
+
+        uint32_t index;
+        if (freeIndices.empty())
+        {
+            index = sounds.size();
+            sounds.push_back(std::move(sound));
+        }
+        else
+        {
+            index = freeIndices.front();
+            freeIndices.pop();
+            sounds[index] = std::move(sound);
+        }
+        return index;
+    }
+
+    void destroySound(uint32_t index, std::vector<Sound>& sounds, std::queue<uint32_t>& freeIndices)
+    {
+        if (index < sounds.size() && sounds[index].stream)
+        {
+            sounds[index] = Sound{};
+            freeIndices.push(index);
+        }
+    }
+
+    uint32_t createLoop(const std::string& filePath) override
+    {
+        return createSound(filePath, loops, freeLoopIndices);
+    }
+
+    void destroyLoop(uint32_t index) override
+    {
+        destroySound(index, loops, freeLoopIndices);
+    }
+
+    uint32_t createSingleShot(const std::string& filePath) override
+    {
+        return createSound(filePath, singleShot, freeSingleShotIndices);
+    }
+
+    void destroySingleShot(uint32_t index) override
+    {
+        destroySound(index, singleShot, freeSingleShotIndices);
+    }
+
+    void update()
+    {
+        for (const auto& sound : loops)
+        {
+            if (sound.stream)
+            {
+                if (SDL_GetAudioStreamQueued(sound.stream) < static_cast<int>(sound.length))
+                {
+                    if (!SDL_PutAudioStreamData(sound.stream, sound.pcm, sound.length))
+                    {
+                        throw std::runtime_error((std::stringstream{} << "failed to send audio stream data: " << SDL_GetError()).str());
+                    }
+                }
+            }
+        }
+        for (uint32_t i = 0; i < singleShot.size(); ++i)
+        {
+            const auto& sound = singleShot[i];
+            if (sound.stream)
+            {
+                if (SDL_GetAudioStreamQueued(sound.stream) == 0)
+                {
+                    destroySingleShot(i);
+                }
+            }
+        }
     }
 };
 
@@ -475,7 +622,7 @@ public:
         geometry(),
         resourceLoader(device, *allocator, textureLoader, geometryLoader, textures, geometry),
         appInterface(window),
-        gameLogicInit(*gameLogic, resourceLoader, scene, inputManager, appInterface),
+        gameLogicInit(*gameLogic, resourceLoader, scene, inputManager, appInterface, audio),
         geometryBuffers(geometry.empty()
                 ? std::nullopt
                 : std::optional{ geometryLoader.createGeometryVertexAndIndexBuffers() }),
@@ -555,8 +702,10 @@ public:
     SDL_AppResult RunFrame()
     {
         auto time = SDL_GetTicksNS() * 1.e-9;
-        gameLogic->runFrame(scene, inputManager, appInterface, time - lastTime);
+        gameLogic->runFrame(scene, inputManager, appInterface, audio, time - lastTime);
         lastTime = time;
+
+        audio.update();
 
         renderer.nextFrame();
         renderer.beginFrame();
