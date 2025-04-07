@@ -75,7 +75,6 @@ struct Enemy
     bool loopAnimation = true;
 };
 
-
 namespace PlayerStates
 {
     enum PlayerStates
@@ -151,6 +150,7 @@ struct GameCommon
         uint32_t blank;
         uint32_t blood;
         uint32_t floor;
+        uint32_t wall;
         std::vector<uint32_t> bullet;
         std::vector<uint32_t> spiderBullet;
         uint32_t splat;
@@ -180,7 +180,7 @@ struct GameCommon
     } inputMappings;
 
     std::vector<Dungeon> dungeons;
-    std::vector<uint32_t> dungeonGeometryResources;
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> dungeonGeometryResourcePairs;
 
     GameCommon(eng::ResourceLoaderInterface& resourceLoader, eng::InputInterface& input)
     {
@@ -188,6 +188,7 @@ struct GameCommon
             .blank = resourceLoader.loadTexture("resources/textures/blank.png"),
             .blood = resourceLoader.loadTexture("resources/textures/Goop1.png"),
             .floor = resourceLoader.loadTexture("resources/textures/floor1_floortexrture.png"),
+            .wall = resourceLoader.loadTexture("resources/textures/woodWallTexture.png"),
             .bullet = getIndexedTextures(resourceLoader, "resources/textures/pc_projectile/PCProjectile{:}.png", 1, 2),
             .spiderBullet = getIndexedTextures(resourceLoader, "resources/textures/spider/SpiderProjectile{:}.png", 2, 2),
             .splat = resourceLoader.loadTexture("resources/textures/Goop2.png"),
@@ -239,19 +240,25 @@ struct GameCommon
         };
 
         dungeons.reserve(numDungeons);
-        dungeonGeometryResources.reserve(numDungeons);
+        dungeonGeometryResourcePairs.reserve(numDungeons);
         for (int i = 0; i < numDungeons; ++i)
         {
             auto dungeon = Dungeon::generate(Dungeon::GenerationParams {
                         .seed = static_cast<uint64_t>(time(0)),
                         .width = 60,
                         .height = 40,
-                        .partitionedRoomCount = 35,
-                        .targetRoomCount = 4,
+                        .partitionedRoomCount = 25,
+                        .targetRoomCount = 8,
                         .minSplitDimension = 6,
                         .minPortalOverlap = 2,
                     });
-            dungeonGeometryResources.push_back(resourceLoader.createGeometry(dungeon.createGeometry(3, 1.0f, 0.5f, 2)));
+            auto geometry = dungeon.createGeometry(3, 1.0f, 0.5f, 2, 1);
+            dungeonGeometryResourcePairs.push_back({
+                    { textures.floor, resourceLoader.createGeometry(geometry.floor) },
+                    { textures.wall, resourceLoader.createGeometry(geometry.walls) },
+                    { textures.wall, resourceLoader.createGeometry(geometry.obstacleSides) },
+                    { textures.wall, resourceLoader.createGeometry(geometry.obstacleTops) },
+                });
             dungeons.push_back(std::move(dungeon));
         }
     }
@@ -337,38 +344,18 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         std::vector<JPH::BodyID> mapBodies;
         dungeon.createPhysicsBodies(2, 1, 0.5, mapBodies, shapeRefs, physicsWorld->getPhysicsSystem());
 
-        uint32_t playerStartRoom = dungeon.rooms.size();
-        uint32_t playerStartRoomSize = 0;
-        for (uint32_t i = 0; i < dungeon.rooms.size(); ++i)
-        {
-            if (dungeon.rooms[i].portalRecordsRange.end - dungeon.rooms[i].portalRecordsRange.start == 1)
-            {
-                uint32_t size = dungeon.rooms[i].width * dungeon.rooms[i].height;
-                if (playerStartRoom == dungeon.rooms.size() || size < playerStartRoomSize)
-                {
-                    playerStartRoom = i;
-                    playerStartRoomSize = size;
-                }
-            }
-        }
-
-        if (playerStartRoom == dungeon.rooms.size()) throw std::runtime_error("failed to generate player start location");
-
-        glm::vec3 playerStartPosition(dungeon.rooms[playerStartRoom].x + dungeon.rooms[playerStartRoom].width / 2, 1,
-                dungeon.rooms[playerStartRoom].y + dungeon.rooms[playerStartRoom].height / 2);
+        glm::vec3 playerStartPosition(dungeon.playerSpawn.first + 0.5, 1, dungeon.playerSpawn.second + 0.5);
 
         const auto& enemyShape = shapeRefs.emplace_back(new JPH::BoxShape(JPH::Vec3(0.25f, 0.6, 0.25f)));
 
-        for (const auto& room : dungeon.rooms)
+        for (const auto& [x, y] : dungeon.spawnPoints)
         {
-            if (&room == &dungeon.rooms[playerStartRoom]) continue;
-
             JPH::CharacterSettings characterSettings;
             characterSettings.mShape = enemyShape;
             characterSettings.mLayer = 1;
             characterSettings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
 
-            glm::vec3 position(room.x + room.width / 2, 0, room.y + room.height / 2);
+            glm::vec3 position(x + 0.5, 0, y + 0.5);
             enemies.push_back(Enemy {
                         .position = position,
                         .extents = glm::vec2(0.25, 0.25),
@@ -514,6 +501,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
             }
             else if (playerState == PlayerStates::Slide)
             {
+                audio.createSingleShot("resources/audio/XTerminatorSlideSound.wav");
                 glm::vec2 moveInput(0, -1);
                 if (glm::any(glm::greaterThan(glm::abs(keyboardMoveInput), glm::vec2(0))))
                 {
@@ -915,10 +903,13 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         sceneLayer.ambientLight = glm::vec3(ambientLightIntensity);
         sceneLayer.lights.clear();
 
-        sceneLayer.geometryInstances.push_back(eng::GeometryInstance {
-                    .textureIndex = common.textures.floor,
-                    .geometryIndex = common.dungeonGeometryResources[dungeonIndex],
-                });
+        for (const auto [ textureIndex, geometryIndex ] : common.dungeonGeometryResourcePairs[dungeonIndex])
+        {
+            sceneLayer.geometryInstances.push_back(eng::GeometryInstance {
+                        .textureIndex = textureIndex,
+                        .geometryIndex = geometryIndex,
+                    });
+        }
 
         sceneLayer.decals.clear();
         sceneLayer.decals.insert(sceneLayer.decals.end(), decals.begin(), decals.end());
@@ -937,7 +928,6 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                             .scale = glm::vec3(0.5),
                             .angle = enemy.angle,
                             .textureIndex = frames[frame],
-                            // .tintColor = enemy.state == Enemy::State::Damaged ? glm::vec4(1.0, 0.5, 0.5, 1.0) : glm::vec4(1.0),
                         });
             }
 
@@ -1050,7 +1040,26 @@ struct GameLogic final: eng::GameLogicInterface
     std::unique_ptr<GameSceneRunner> sceneRunner;
 
     std::vector<uint32_t> anyActionInputs;
+    bool lastPressed = false;
     uint32_t themeLoop;
+
+    struct Screens
+    {
+        enum ScreenIndex
+        {
+            Title,
+            Lose,
+            Win,
+            MAX_VALUE,
+        };
+    };
+
+    std::vector<uint32_t> screens[Screens::MAX_VALUE];
+    int currentScreen = Screens::Title;
+
+    const uint32_t animationFPS = 8;
+    uint32_t animationCounter = 0;
+    double animationTimer = 0;
 
     void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio) override
     {
@@ -1062,10 +1071,21 @@ struct GameLogic final: eng::GameLogicInterface
             input.mapAnyMouseButton(input.createMapping()),
             input.mapAnyGamepadButton(input.createMapping()),
         };
+
+        screens[Screens::Title] = { resourceLoader.loadTexture("resources/textures/title.png") };
+        screens[Screens::Lose] = { resourceLoader.loadTexture("resources/textures/gameover.png") };
+        screens[Screens::Win] = { resourceLoader.loadTexture("resources/textures/win.png") };
     }
 
     void runFrame(eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio, const double deltaTime) override
     {
+        animationTimer += deltaTime;
+        while (animationTimer >= 1.0 / animationFPS)
+        {
+            ++animationCounter;
+            animationTimer -= 1.0 / animationFPS;
+        }
+
         if (sceneRunner)
         {
             sceneRunner->runFrame(input, app, audio, deltaTime);
@@ -1087,6 +1107,9 @@ struct GameLogic final: eng::GameLogicInterface
                     themeLoop = audio.createLoop("resources/audio/GasStationThemereal.wav");
                     currentDungeon = 0;
                     sceneRunner.reset();
+                    currentScreen = Screens::Win;
+                    animationCounter = 0;
+                    animationTimer = 0;
                 }
             }
             else if (sceneRunner->state == GameSceneRunner::State::GameOver)
@@ -1095,13 +1118,48 @@ struct GameLogic final: eng::GameLogicInterface
                 themeLoop = audio.createLoop("resources/audio/GasStationThemereal.wav");
                 currentDungeon = 0;
                 sceneRunner.reset();
+                currentScreen = Screens::Lose;
+                animationCounter = 0;
+                animationTimer = 0;
             }
         }
-        else if (std::reduce(anyActionInputs.begin(), anyActionInputs.end(), false, [&](const bool state, const uint32_t mapping) {
-                        return state || input.getBoolean(mapping);
-                    }))
+        else
         {
-            sceneRunner.reset(new GameSceneRunner(*common, currentDungeon++));
+            bool pressed = std::reduce(anyActionInputs.begin(), anyActionInputs.end(), false,
+                    [&](const bool state, const uint32_t mapping) { return state || input.getBoolean(mapping); });
+            if (pressed && !lastPressed)
+            {
+                if (currentScreen == Screens::Title)
+                {
+                    sceneRunner.reset(new GameSceneRunner(*common, currentDungeon++));
+                }
+                else
+                {
+                    currentScreen = Screens::Title;
+                    animationCounter = 0;
+                    animationTimer = 0;
+                }
+            }
+            lastPressed = pressed;
+
+            const auto [framebufferWidth, framebufferHeight] = scene.framebufferSize();
+            const float aspectRatio = static_cast<float>(framebufferWidth) / static_cast<float>(framebufferHeight);
+            scene.layers().resize(1);
+            auto& layer = scene.layers().front();
+            layer.spriteInstances.clear();
+            layer.geometryInstances.clear();
+            layer.overlaySpriteInstances.clear();
+            layer.lights.clear();
+            layer.decals.clear();
+            layer.viewport = { .offset = { 0, framebufferHeight }, .extent = { framebufferWidth, -static_cast<float>(framebufferHeight) } };
+            layer.scissor = { .extent = { framebufferWidth, framebufferHeight } };
+            layer.projection = glm::orthoRH_ZO(-aspectRatio, aspectRatio, -1.0f, 1.0f, -1.0f, 1.0f);
+            layer.view = glm::identity<glm::mat4>();
+            layer.ambientLight = glm::vec3(1);
+
+            layer.spriteInstances.push_back(eng::SpriteInstance {
+                        .textureIndex = screens[currentScreen][animationCounter % screens[currentScreen].size()],
+                    });
         }
     }
 

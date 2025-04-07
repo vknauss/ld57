@@ -32,9 +32,17 @@ struct Dungeon
         uint32_t portal;
     };
 
+    struct Obstacle
+    {
+        uint32_t x, y, width, height;
+    };
+
     std::vector<Room> rooms;
     std::vector<Portal> portals;
     std::vector<RoomPortalRecord> roomPortalRecords;
+    std::vector<Obstacle> obstacles;
+    std::vector<std::pair<uint32_t, uint32_t>> spawnPoints;
+    std::pair<uint32_t, uint32_t> playerSpawn;
 
     struct GenerationParams
     {
@@ -46,9 +54,17 @@ struct Dungeon
         uint32_t minPortalOverlap;
     };
 
+    struct Geometry
+    {
+        eng::GeometryDescription walls;
+        eng::GeometryDescription floor;
+        eng::GeometryDescription obstacleSides;
+        eng::GeometryDescription obstacleTops;
+    };
+
     static Dungeon generate(const GenerationParams& params);
 
-    eng::GeometryDescription createGeometry(const float wallHeight, const float doorWidth, const float wallThickness, const float doorHeight) const;
+    Geometry createGeometry(const float wallHeight, const float doorWidth, const float wallThickness, const float doorHeight, const float obstacleHeight) const;
 
     void createPhysicsBodies(const float wallHeight, const float doorWidth, const float wallThickness,
             std::vector<JPH::BodyID>& bodies, std::vector<JPH::Ref<JPH::Shape>>& shapeRefs, JPH::PhysicsSystem& physicsSystem) const;

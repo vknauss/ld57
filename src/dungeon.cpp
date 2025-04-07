@@ -238,44 +238,120 @@ Dungeon Dungeon::generate(const Dungeon::GenerationParams& params)
         }
     }
 
+    uint32_t playerStartRoom = rooms.size();
+    uint32_t playerStartRoomSize = 0;
+    for (uint32_t i = 0; i < rooms.size(); ++i)
+    {
+        if (rooms[i].portalRecordsRange.end - rooms[i].portalRecordsRange.start == 1)
+        {
+            uint32_t size = rooms[i].width * rooms[i].height;
+            if (playerStartRoom == rooms.size() || size < playerStartRoomSize)
+            {
+                playerStartRoom = i;
+                playerStartRoomSize = size;
+            }
+        }
+    }
+
+    // populate
+    std::vector<Obstacle> obstacles;
+    std::vector<std::pair<uint32_t, uint32_t>> spawnPoints;
+    std::vector<int> spaces;
+    std::pair<uint32_t, uint32_t> playerSpawn = { 0, 0 };
+    for (const auto& room : rooms)
+    {
+        if (room.width > 2 && room.height > 2)
+        {
+            uint32_t availableTiles = (room.width - 2) * (room.height - 2);
+            spaces.assign(availableTiles, 0);
+            uint32_t countObstacles = 1 + availableTiles / 20 + (prng() % (1 + availableTiles / 5));
+            for (uint32_t i = 0; i < countObstacles; ++i)
+            {
+                uint32_t x = prng() % (room.width - 2);
+                uint32_t y = prng() % (room.height - 2);
+                if (!spaces[y * (room.width - 2) + x])
+                {
+                    spaces[y * (room.width - 2) + x] = 1;
+                    obstacles.push_back(Obstacle { .x = room.x + 1 + x, .y = room.y + 1 + y, .width = 1, .height = 1 });
+                }
+            }
+
+            if (&room == &rooms[playerStartRoom])
+            {
+                while (true)
+                {
+                    uint32_t x = prng() % (room.width - 2);
+                    uint32_t y = prng() % (room.height - 2);
+                    if (!spaces[y * (room.width - 2) + x])
+                    {
+                        spaces[y * (room.width - 2) + x] = 1;
+                        playerSpawn = { room.x + 1 + x, room.y + 1 + y };
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                uint32_t countEnemies = 1 + availableTiles / 10 + (prng() % (1 + availableTiles / 8));
+                for (uint32_t i = 0; i < countEnemies; ++i)
+                {
+                    uint32_t x = prng() % (room.width - 2);
+                    uint32_t y = prng() % (room.height - 2);
+                    if (!spaces[y * (room.width - 2) + x])
+                    {
+                        spaces[y * (room.width - 2) + x] = 1;
+                        spawnPoints.push_back({ room.x + 1 + x, room.y + 1 + y });
+                    }
+                }
+            }
+        }
+        else if (&room == &rooms[playerStartRoom])
+        {
+            playerSpawn = { room.x + room.width / 2, room.y + room.height / 2 };
+        }
+    }
+
     return Dungeon {
         .rooms = std::move(rooms),
         .portals = std::move(portals),
         .roomPortalRecords = std::move(roomPortalRecords),
+        .obstacles = std::move(obstacles),
+        .spawnPoints = std::move(spawnPoints),
+        .playerSpawn = std::move(playerSpawn),
     };
 }
 
-eng::GeometryDescription Dungeon::createGeometry(const float wallHeight, const float doorWidth, const float wallThickness, const float doorHeight) const
+Dungeon::Geometry Dungeon::createGeometry(const float wallHeight, const float doorWidth, const float wallThickness, const float doorHeight, const float obstacleHeight) const
 {
-    eng::GeometryDescription geometry;
+    Geometry geometry;
 
     std::queue<uint32_t> wallNodeIndices;
 
     for (const auto& room : rooms)
     {
         // Floor
-        geometry.indices.push_back(geometry.positions.size());
-        geometry.indices.push_back(geometry.positions.size() + 1);
-        geometry.indices.push_back(geometry.positions.size() + 2);
-        geometry.indices.push_back(geometry.positions.size() + 2);
-        geometry.indices.push_back(geometry.positions.size() + 1);
-        geometry.indices.push_back(geometry.positions.size() + 3);
+        geometry.floor.indices.push_back(geometry.floor.positions.size());
+        geometry.floor.indices.push_back(geometry.floor.positions.size() + 1);
+        geometry.floor.indices.push_back(geometry.floor.positions.size() + 2);
+        geometry.floor.indices.push_back(geometry.floor.positions.size() + 2);
+        geometry.floor.indices.push_back(geometry.floor.positions.size() + 1);
+        geometry.floor.indices.push_back(geometry.floor.positions.size() + 3);
 
-        geometry.positions.push_back(glm::vec3(room.x, 0, room.y));
-        geometry.texCoords.push_back(glm::vec2(room.x, room.y));
-        geometry.normals.push_back(glm::vec3(0, 1, 0));
+        geometry.floor.positions.push_back(glm::vec3(room.x, 0, room.y));
+        geometry.floor.texCoords.push_back(glm::vec2(room.x, room.y));
+        geometry.floor.normals.push_back(glm::vec3(0, 1, 0));
 
-        geometry.positions.push_back(glm::vec3(room.x, 0, room.y + room.height));
-        geometry.texCoords.push_back(glm::vec2(room.x, room.y + room.height));
-        geometry.normals.push_back(glm::vec3(0, 1, 0));
+        geometry.floor.positions.push_back(glm::vec3(room.x, 0, room.y + room.height));
+        geometry.floor.texCoords.push_back(glm::vec2(room.x, room.y + room.height));
+        geometry.floor.normals.push_back(glm::vec3(0, 1, 0));
 
-        geometry.positions.push_back(glm::vec3(room.x + room.width, 0, room.y));
-        geometry.texCoords.push_back(glm::vec2(room.x + room.width, room.y));
-        geometry.normals.push_back(glm::vec3(0, 1, 0));
+        geometry.floor.positions.push_back(glm::vec3(room.x + room.width, 0, room.y));
+        geometry.floor.texCoords.push_back(glm::vec2(room.x + room.width, room.y));
+        geometry.floor.normals.push_back(glm::vec3(0, 1, 0));
 
-        geometry.positions.push_back(glm::vec3(room.x + room.width, 0, room.y + room.height));
-        geometry.texCoords.push_back(glm::vec2(room.x + room.width, room.y + room.height));
-        geometry.normals.push_back(glm::vec3(0, 1, 0));
+        geometry.floor.positions.push_back(glm::vec3(room.x + room.width, 0, room.y + room.height));
+        geometry.floor.texCoords.push_back(glm::vec2(room.x + room.width, room.y + room.height));
+        geometry.floor.normals.push_back(glm::vec3(0, 1, 0));
 
         // Walls
         for (uint32_t i = 0; i < 4; ++i)
@@ -314,19 +390,19 @@ eng::GeometryDescription Dungeon::createGeometry(const float wallHeight, const f
 
             float tc[] = { glm::dot(dir, points[0]), glm::dot(dir, points[1]) };
 
-            geometry.indices.push_back(geometry.positions.size());
-            geometry.indices.push_back(geometry.positions.size() + 1);
-            geometry.indices.push_back(geometry.positions.size() + 2);
-            geometry.indices.push_back(geometry.positions.size() + 2);
-            geometry.indices.push_back(geometry.positions.size() + 1);
-            geometry.indices.push_back(geometry.positions.size() + 3);
+            geometry.walls.indices.push_back(geometry.walls.positions.size());
+            geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+            geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+            geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+            geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+            geometry.walls.indices.push_back(geometry.walls.positions.size() + 3);
 
-            geometry.positions.push_back(points[0]);
-            geometry.positions.push_back(points[0] + glm::vec3(0, wallHeight, 0));
-            geometry.texCoords.push_back(glm::vec2(tc[0], 0));
-            geometry.texCoords.push_back(glm::vec2(tc[0], wallHeight));
-            geometry.normals.push_back(normal);
-            geometry.normals.push_back(normal);
+            geometry.walls.positions.push_back(points[0]);
+            geometry.walls.positions.push_back(points[0] + glm::vec3(0, wallHeight, 0));
+            geometry.walls.texCoords.push_back(glm::vec2(tc[0], 0));
+            geometry.walls.texCoords.push_back(glm::vec2(tc[0], wallHeight));
+            geometry.walls.normals.push_back(normal);
+            geometry.walls.normals.push_back(normal);
 
             for (uint32_t j = room.wallStartPortalRecord.i[i]; j < (i < 3 ? room.wallStartPortalRecord.i[i + 1] : room.portalRecordsRange.end); ++j)
             {
@@ -336,131 +412,226 @@ eng::GeometryDescription Dungeon::createGeometry(const float wallHeight, const f
                 float ltc = glm::dot(dir, pos);
 
                 // finish wall segment
-                //
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir);
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, wallHeight));
-                geometry.normals.push_back(normal);
-                geometry.normals.push_back(normal);
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir);
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, wallHeight));
+                geometry.walls.normals.push_back(normal);
+                geometry.walls.normals.push_back(normal);
 
                 // interior face 1
+                geometry.walls.indices.push_back(geometry.walls.positions.size());
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 3);
 
-                geometry.indices.push_back(geometry.positions.size());
-                geometry.indices.push_back(geometry.positions.size() + 1);
-                geometry.indices.push_back(geometry.positions.size() + 2);
-                geometry.indices.push_back(geometry.positions.size() + 2);
-                geometry.indices.push_back(geometry.positions.size() + 1);
-                geometry.indices.push_back(geometry.positions.size() + 3);
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir);
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, wallHeight));
+                geometry.walls.normals.push_back(dir);
+                geometry.walls.normals.push_back(dir);
 
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir);
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, wallHeight));
-                geometry.normals.push_back(dir);
-                geometry.normals.push_back(dir);
-
-                geometry.positions.push_back(pos - 0.5f * doorWidth * dir);
-                geometry.positions.push_back(pos - 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth + 0.5f * wallThickness, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth + 0.5f * wallThickness, wallHeight));
-                geometry.normals.push_back(dir);
-                geometry.normals.push_back(dir);
+                geometry.walls.positions.push_back(pos - 0.5f * doorWidth * dir);
+                geometry.walls.positions.push_back(pos - 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth + 0.5f * wallThickness, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth + 0.5f * wallThickness, wallHeight));
+                geometry.walls.normals.push_back(dir);
+                geometry.walls.normals.push_back(dir);
 
                 // interior face 2
+                geometry.walls.indices.push_back(geometry.walls.positions.size());
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 3);
 
-                geometry.indices.push_back(geometry.positions.size());
-                geometry.indices.push_back(geometry.positions.size() + 1);
-                geometry.indices.push_back(geometry.positions.size() + 2);
-                geometry.indices.push_back(geometry.positions.size() + 2);
-                geometry.indices.push_back(geometry.positions.size() + 1);
-                geometry.indices.push_back(geometry.positions.size() + 3);
+                geometry.walls.positions.push_back(pos + 0.5f * doorWidth * dir);
+                geometry.walls.positions.push_back(pos + 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth - 0.5f * wallThickness, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth - 0.5f * wallThickness, wallHeight));
+                geometry.walls.normals.push_back(-dir);
+                geometry.walls.normals.push_back(-dir);
 
-                geometry.positions.push_back(pos + 0.5f * doorWidth * dir);
-                geometry.positions.push_back(pos + 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth - 0.5f * wallThickness, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth - 0.5f * wallThickness, wallHeight));
-                geometry.normals.push_back(-dir);
-                geometry.normals.push_back(-dir);
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir);
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, wallHeight));
+                geometry.walls.normals.push_back(-dir);
+                geometry.walls.normals.push_back(-dir);
 
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir);
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, wallHeight));
-                geometry.normals.push_back(-dir);
-                geometry.normals.push_back(-dir);
+                // upper portion
+                geometry.walls.indices.push_back(geometry.walls.positions.size());
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 3);
 
-                /// upper portion
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir + glm::vec3(0, doorHeight, 0));
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, doorHeight));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, wallHeight));
+                geometry.walls.normals.push_back(normal);
+                geometry.walls.normals.push_back(normal);
 
-                geometry.indices.push_back(geometry.positions.size());
-                geometry.indices.push_back(geometry.positions.size() + 1);
-                geometry.indices.push_back(geometry.positions.size() + 2);
-                geometry.indices.push_back(geometry.positions.size() + 2);
-                geometry.indices.push_back(geometry.positions.size() + 1);
-                geometry.indices.push_back(geometry.positions.size() + 3);
-
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir + glm::vec3(0, doorHeight, 0));
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness - 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, doorHeight));
-                geometry.texCoords.push_back(glm::vec2(ltc - 0.5 * doorWidth, wallHeight));
-                geometry.normals.push_back(normal);
-                geometry.normals.push_back(normal);
-
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir + glm::vec3(0, doorHeight, 0));
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, doorHeight));
-                geometry.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, wallHeight));
-                geometry.normals.push_back(normal);
-                geometry.normals.push_back(normal);
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir + glm::vec3(0, doorHeight, 0));
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, doorHeight));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, wallHeight));
+                geometry.walls.normals.push_back(normal);
+                geometry.walls.normals.push_back(normal);
 
                 // next wall segment
+                geometry.walls.indices.push_back(geometry.walls.positions.size());
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+                geometry.walls.indices.push_back(geometry.walls.positions.size() + 3);
 
-                geometry.indices.push_back(geometry.positions.size());
-                geometry.indices.push_back(geometry.positions.size() + 1);
-                geometry.indices.push_back(geometry.positions.size() + 2);
-                geometry.indices.push_back(geometry.positions.size() + 2);
-                geometry.indices.push_back(geometry.positions.size() + 1);
-                geometry.indices.push_back(geometry.positions.size() + 3);
-
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir);
-                geometry.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, 0));
-                geometry.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, wallHeight));
-                geometry.normals.push_back(normal);
-                geometry.normals.push_back(normal);
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir);
+                geometry.walls.positions.push_back(pos + normal * 0.5f * wallThickness + 0.5f * doorWidth * dir + glm::vec3(0, wallHeight, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, 0));
+                geometry.walls.texCoords.push_back(glm::vec2(ltc + 0.5 * doorWidth, wallHeight));
+                geometry.walls.normals.push_back(normal);
+                geometry.walls.normals.push_back(normal);
             }
 
-            geometry.positions.push_back(points[1]);
-            geometry.positions.push_back(points[1] + glm::vec3(0, wallHeight, 0));
-            geometry.texCoords.push_back(glm::vec2(tc[1], 0));
-            geometry.texCoords.push_back(glm::vec2(tc[1], wallHeight));
-            geometry.normals.push_back(normal);
-            geometry.normals.push_back(normal);
-
+            geometry.walls.positions.push_back(points[1]);
+            geometry.walls.positions.push_back(points[1] + glm::vec3(0, wallHeight, 0));
+            geometry.walls.texCoords.push_back(glm::vec2(tc[1], 0));
+            geometry.walls.texCoords.push_back(glm::vec2(tc[1], wallHeight));
+            geometry.walls.normals.push_back(normal);
+            geometry.walls.normals.push_back(normal);
 
             // tops of walls
-            geometry.indices.push_back(geometry.positions.size());
-            geometry.indices.push_back(geometry.positions.size() + 1);
-            geometry.indices.push_back(geometry.positions.size() + 2);
-            geometry.indices.push_back(geometry.positions.size() + 2);
-            geometry.indices.push_back(geometry.positions.size() + 1);
-            geometry.indices.push_back(geometry.positions.size() + 3);
+            geometry.walls.indices.push_back(geometry.walls.positions.size());
+            geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+            geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+            geometry.walls.indices.push_back(geometry.walls.positions.size() + 2);
+            geometry.walls.indices.push_back(geometry.walls.positions.size() + 1);
+            geometry.walls.indices.push_back(geometry.walls.positions.size() + 3);
 
-            geometry.positions.push_back(points[0] + glm::vec3(0, wallHeight, 0));
-            geometry.positions.push_back(points[0] + glm::vec3(0, wallHeight, 0) - 0.5f * wallThickness * normal);
-            geometry.texCoords.push_back(glm::vec2(tc[0], wallHeight));
-            geometry.texCoords.push_back(glm::vec2(tc[0], wallHeight + 0.5f * wallThickness));
-            geometry.normals.push_back(glm::vec3(0, 1, 0));
-            geometry.normals.push_back(glm::vec3(0, 1, 0));
+            geometry.walls.positions.push_back(points[0] + glm::vec3(0, wallHeight, 0));
+            geometry.walls.positions.push_back(points[0] + glm::vec3(0, wallHeight, 0) - 0.5f * wallThickness * normal);
+            geometry.walls.texCoords.push_back(glm::vec2(tc[0], wallHeight));
+            geometry.walls.texCoords.push_back(glm::vec2(tc[0], wallHeight + 0.5f * wallThickness));
+            geometry.walls.normals.push_back(glm::vec3(0, 1, 0));
+            geometry.walls.normals.push_back(glm::vec3(0, 1, 0));
 
-            geometry.positions.push_back(points[1] + glm::vec3(0, wallHeight, 0));
-            geometry.positions.push_back(points[1] + glm::vec3(0, wallHeight, 0) - 0.5f * wallThickness * normal);
-            geometry.texCoords.push_back(glm::vec2(tc[1], wallHeight));
-            geometry.texCoords.push_back(glm::vec2(tc[1], wallHeight + 0.5f * wallThickness));
-            geometry.normals.push_back(glm::vec3(0, 1, 0));
-            geometry.normals.push_back(glm::vec3(0, 1, 0));
-
+            geometry.walls.positions.push_back(points[1] + glm::vec3(0, wallHeight, 0));
+            geometry.walls.positions.push_back(points[1] + glm::vec3(0, wallHeight, 0) - 0.5f * wallThickness * normal);
+            geometry.walls.texCoords.push_back(glm::vec2(tc[1], wallHeight));
+            geometry.walls.texCoords.push_back(glm::vec2(tc[1], wallHeight + 0.5f * wallThickness));
+            geometry.walls.normals.push_back(glm::vec3(0, 1, 0));
+            geometry.walls.normals.push_back(glm::vec3(0, 1, 0));
         }
+    }
+
+    for (const auto& obstacle : obstacles)
+    {
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size());
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 1);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 2);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 2);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 1);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 3);
+
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x, 0, obstacle.y + obstacle.height));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x, obstacleHeight, obstacle.y + obstacle.height));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x, 0, obstacle.y));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x, obstacleHeight, obstacle.y));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.y + obstacle.height, 0));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.y + obstacle.height, obstacleHeight));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.y, 0));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.y, obstacleHeight));
+        geometry.obstacleSides.normals.push_back(glm::vec3(-1, 0, 0));
+        geometry.obstacleSides.normals.push_back(glm::vec3(-1, 0, 0));
+        geometry.obstacleSides.normals.push_back(glm::vec3(-1, 0, 0));
+        geometry.obstacleSides.normals.push_back(glm::vec3(-1, 0, 0));
+
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size());
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 1);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 2);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 2);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 1);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 3);
+
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x, 0, obstacle.y));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x, obstacleHeight, obstacle.y));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x + obstacle.width, 0, obstacle.y));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x + obstacle.width, obstacleHeight, obstacle.y));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.x, 0));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.x, obstacleHeight));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.x + obstacle.width, 0));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.x + obstacle.width, obstacleHeight));
+        geometry.obstacleSides.normals.push_back(glm::vec3(0, 0, -1));
+        geometry.obstacleSides.normals.push_back(glm::vec3(0, 0, -1));
+        geometry.obstacleSides.normals.push_back(glm::vec3(0, 0, -1));
+        geometry.obstacleSides.normals.push_back(glm::vec3(0, 0, -1));
+
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size());
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 1);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 2);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 2);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 1);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 3);
+
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x + obstacle.width, 0, obstacle.y));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x + obstacle.width, obstacleHeight, obstacle.y));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x + obstacle.width, 0, obstacle.y + obstacle.height));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x + obstacle.width, obstacleHeight, obstacle.y + obstacle.height));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.y, 0));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.y, obstacleHeight));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.y + obstacle.height, 0));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.y + obstacle.height, obstacleHeight));
+        geometry.obstacleSides.normals.push_back(glm::vec3(1, 0, 0));
+        geometry.obstacleSides.normals.push_back(glm::vec3(1, 0, 0));
+        geometry.obstacleSides.normals.push_back(glm::vec3(1, 0, 0));
+        geometry.obstacleSides.normals.push_back(glm::vec3(1, 0, 0));
+
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size());
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 1);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 2);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 2);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 1);
+        geometry.obstacleSides.indices.push_back(geometry.obstacleSides.positions.size() + 3);
+
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x + obstacle.width, 0, obstacle.y + obstacle.height));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x + obstacle.width, obstacleHeight, obstacle.y + obstacle.height));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x, 0, obstacle.y + obstacle.height));
+        geometry.obstacleSides.positions.push_back(glm::vec3(obstacle.x, obstacleHeight, obstacle.y + obstacle.height));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.x + obstacle.width, 0));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.x + obstacle.width, obstacleHeight));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.x, 0));
+        geometry.obstacleSides.texCoords.push_back(glm::vec2(obstacle.x, obstacleHeight));
+        geometry.obstacleSides.normals.push_back(glm::vec3(0, 0, 1));
+        geometry.obstacleSides.normals.push_back(glm::vec3(0, 0, 1));
+        geometry.obstacleSides.normals.push_back(glm::vec3(0, 0, 1));
+        geometry.obstacleSides.normals.push_back(glm::vec3(0, 0, 1));
+
+        geometry.obstacleTops.indices.push_back(geometry.obstacleTops.positions.size());
+        geometry.obstacleTops.indices.push_back(geometry.obstacleTops.positions.size() + 1);
+        geometry.obstacleTops.indices.push_back(geometry.obstacleTops.positions.size() + 2);
+        geometry.obstacleTops.indices.push_back(geometry.obstacleTops.positions.size() + 2);
+        geometry.obstacleTops.indices.push_back(geometry.obstacleTops.positions.size() + 1);
+        geometry.obstacleTops.indices.push_back(geometry.obstacleTops.positions.size() + 3);
+        geometry.obstacleTops.positions.push_back(glm::vec3(obstacle.x, obstacleHeight, obstacle.y));
+        geometry.obstacleTops.positions.push_back(glm::vec3(obstacle.x, obstacleHeight, obstacle.y + obstacle.height));
+        geometry.obstacleTops.positions.push_back(glm::vec3(obstacle.x + obstacle.width, obstacleHeight, obstacle.y));
+        geometry.obstacleTops.positions.push_back(glm::vec3(obstacle.x + obstacle.width, obstacleHeight, obstacle.y + obstacle.height));
+        geometry.obstacleTops.texCoords.push_back(glm::vec2(obstacle.x, obstacle.y));
+        geometry.obstacleTops.texCoords.push_back(glm::vec2(obstacle.x, obstacle.y + obstacle.height));
+        geometry.obstacleTops.texCoords.push_back(glm::vec2(obstacle.x + obstacle.width, obstacle.y));
+        geometry.obstacleTops.texCoords.push_back(glm::vec2(obstacle.x + obstacle.width, obstacle.y + obstacle.height));
+        geometry.obstacleTops.normals.push_back(glm::vec3(0, 1, 0));
+        geometry.obstacleTops.normals.push_back(glm::vec3(0, 1, 0));
+        geometry.obstacleTops.normals.push_back(glm::vec3(0, 1, 0));
+        geometry.obstacleTops.normals.push_back(glm::vec3(0, 1, 0));
     }
 
     return geometry;
@@ -534,6 +705,14 @@ void Dungeon::createPhysicsBodies(const float wallHeight, const float doorWidth,
                             glm_to_jph(0.5f * (points[1] + lastPoint + 0.5f * wallThickness * normal + glm::vec3(0, wallHeight, 0))), JPH::Quat::sIdentity(), JPH::EMotionType::Static, 0),
                         JPH::EActivation::DontActivate));
         }
+    }
+
+    for (const auto& obstacle : obstacles)
+    {
+        bodies.push_back(physicsSystem.GetBodyInterface().CreateAndAddBody(
+                    JPH::BodyCreationSettings(shapeRefs.emplace_back(new JPH::BoxShape(JPH::Vec3(0.5 * obstacle.width, 0.5 * wallHeight, 0.5 * obstacle.height))),
+                        JPH::Vec3(obstacle.x + 0.5 * obstacle.width, 0.5 * wallHeight, obstacle.y + 0.5 * obstacle.height), JPH::Quat::sIdentity(), JPH::EMotionType::Static, 0),
+                    JPH::EActivation::DontActivate));
     }
 }
 
