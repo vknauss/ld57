@@ -1,18 +1,21 @@
 #include "input_manager.hpp"
 
 #include <algorithm>
-#include <iostream>
 
 using eng::InputManager;
+
+constexpr int ANY_INPUT = -996;
 
 void InputManager::handleKey(const int key, const int scancode, const bool down, const int mods)
 {
     updateStateBoolean(keyMap, scancode, down);
+    updateStateBoolean(keyMap, ANY_INPUT, down);
 }
 
 void InputManager::handleMouseButton(const int button, const bool down)
 {
     updateStateBoolean(mouseButtonMap, button, down);
+    updateStateBoolean(mouseButtonMap, ANY_INPUT, down);
 }
 
 void InputManager::handleMouseMotion(const float x, const float y, const float dx, const float dy)
@@ -25,7 +28,6 @@ void InputManager::handleMouseMotion(const float x, const float y, const float d
 
 void InputManager::handleGamepadConnection(const int gamepad, const bool connected)
 {
-    std::cout << "InputManager::handleGamepadConnection " << gamepad << " " << connected << std::endl;
     auto it = std::find(gamepads.begin(), gamepads.end(), gamepad);
     if (connected && it == gamepads.end())
     {
@@ -47,6 +49,7 @@ void InputManager::handleGamepadButton(const int gamepad, const int button, cons
 {
     // TODO: fix this if we need to support multiple connected gamepads
     updateStateBoolean(gamepadButtonMap, button, down);
+    updateStateBoolean(gamepadButtonMap, ANY_INPUT, down);
 }
 
 InputManager::InputManager()
@@ -118,6 +121,21 @@ uint32_t InputManager::mapGamepadButton(const uint32_t mapping, const int button
             }));
     mappings[mapping].event.boolState = event;
     return mapping;
+}
+
+uint32_t InputManager::mapAnyKey(const uint32_t mapping, const BoolStateEvent event)
+{
+    return mapKey(mapping, ANY_INPUT, event);
+}
+
+uint32_t InputManager::mapAnyMouseButton(const uint32_t mapping, const BoolStateEvent event)
+{
+    return mapMouseButton(mapping, ANY_INPUT, event);
+}
+
+uint32_t InputManager::mapAnyGamepadButton(const uint32_t mapping, const BoolStateEvent event)
+{
+    return mapGamepadButton(mapping, ANY_INPUT, event);
 }
 
 bool InputManager::getBoolean(const uint32_t mapping) const

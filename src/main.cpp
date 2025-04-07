@@ -127,8 +127,10 @@ struct CooldownTrigger
     }
 };
 
-struct GameLogic final : eng::GameLogicInterface, public JPH::CharacterContactListener
+struct GameCommon
 {
+    const int numDungeons = 3;
+
     struct {
         uint32_t blank;
         uint32_t blood;
@@ -141,8 +143,6 @@ struct GameLogic final : eng::GameLogicInterface, public JPH::CharacterContactLi
         std::vector<uint32_t> spiderWalk;
         std::vector<uint32_t> spiderShoot;
     } textures;
-
-    uint32_t dungeonGeometryResource;
 
     struct {
         uint32_t left;
@@ -161,144 +161,11 @@ struct GameLogic final : eng::GameLogicInterface, public JPH::CharacterContactLi
         std::vector<uint32_t> slide;
     } inputMappings;
 
-    const float movementSpeed = 7.0f;
-    const float slideSpeed = 12.0f;
-    const float cosineThresholdCardinal = glm::cos(glm::radians(22.5));
-    const uint32_t animationFPS = 8;
-    const float shootCooldown = 0.4f;
-    const float slideCooldown = 0.4f;
-    const glm::vec3 bulletOrigin = glm::vec3(0.0625, 0, -0.5);
-    const float bulletSpeed = 20.0f;
-    const float bulletRadius = 0.05f;
-    const float enemyDamageCooldown = 0.6f;
-    const int playerMaxHealth = 10;
-    const float slideTime = 3.0f;
-    const float shootTime = 2.0f;
+    std::vector<Dungeon> dungeons;
+    std::vector<uint32_t> dungeonGeometryResources;
 
-    const glm::vec2 fontTexCoordScale = { 1.0f / 16.0f, 1.0f / 8.0f };
-
-    std::unique_ptr<fff::PhysicsWorldInterface> physicsWorld;
-
-
-    std::vector<JPH::Ref<JPH::Shape>> shapeRefs;
-    JPH::Ref<JPH::CharacterVirtual> playerCharacter;
-    JPH::Ref<JPH::Shape> bulletShape;
-    JPH::Ref<JPH::Shape> characterShape;
-
-    std::vector<Enemy> enemies;
-    std::vector<eng::Light> lights;
-    std::vector<eng::Decal> decals;
-    std::vector<Bullet> bullets;
-
-    uint32_t animationCounter = 0;
-    double animationTimer = 0;
-
-    glm::vec3 cameraPosition = { 0, 2, 0 };
-    float playerAngle = 0;
-    PlayerStates::PlayerStates playerState = PlayerStates::Idle;
-    PlayerStates::PlayerStates lastPlayerState = PlayerStates::Initial;
-    float playerStateTimer = 0;
-    glm::vec3 playerSlideVelocity = glm::vec3(0);
-
-    CooldownTrigger shootTrigger;
-    CooldownTrigger slideTrigger;
-
-    int playerHealth = playerMaxHealth;
-
-    uint32_t themeAudio;
-
-    // std::string text = "X-Terminator 5000";
-
-    ~GameLogic()
+    GameCommon(eng::ResourceLoaderInterface& resourceLoader, eng::InputInterface& input)
     {
-        for (auto& enemy : enemies)
-        {
-            enemy.character->RemoveFromPhysicsSystem();
-        }
-        enemies.clear();
-        playerCharacter = nullptr;
-        shapeRefs.clear();
-        physicsWorld.reset();
-    }
-
-    void updatePlayerPosition(const glm::vec2& moveInput, const float deltaTime)
-    {
-        glm::vec3 direction(0);
-        if (glm::dot(moveInput, moveInput) > glm::epsilon<float>())
-        {
-            const glm::vec3 forward = glm::vec3(0, 0, -1);
-            const glm::vec3 right = glm::vec3(1, 0, 0);
-            direction = moveInput.y * forward + moveInput.x * right;
-            if (auto len = glm::length(direction); len > 1.0f)
-            {
-                direction /= len;
-            }
-        }
-
-        auto velocity = jph_to_glm(playerCharacter->GetLinearVelocity());
-        playerCharacter->SetLinearVelocity(glm_to_jph(movementSpeed * direction + glm::vec3(0, velocity.y, 0)));
-    }
-
-    void OnContactAdded(const JPH::CharacterVirtual* character, const JPH::BodyID& bodyID1, const JPH::SubShapeID& subShapeID1,
-            const JPH::RVec3Arg contactPosition, const JPH::Vec3Arg contactNormal, JPH::CharacterContactSettings& ioSettings) override
-    {
-        if (auto bulletIter = std::find_if(bullets.begin(), bullets.end(),
-                    [bodyID1](const auto& bullet) { return bullet.bodyID == bodyID1; });
-                bulletIter != bullets.end())
-        {
-            physicsWorld->getPhysicsSystem().GetBodyInterface().RemoveBody(bodyID1);
-            physicsWorld->getPhysicsSystem().GetBodyInterface().DestroyBody(bodyID1);
-            bullets.erase(bulletIter);
-
-            if (character == playerCharacter && playerState != PlayerStates::Slide)
-            {
-                playerState = PlayerStates::Damaged;
-            }
-        }
-    }
-
-    void OnContactRemoved(const JPH::CharacterVirtual* character, const JPH::BodyID& bodyID1, const JPH::SubShapeID& subShapeID1) override
-    {
-    }
-
-    void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio) override
-    {
-        themeAudio = audio.createLoop("resources/audio/GasStationThemereal.wav");
-
-        physicsWorld.reset(fff::createPhysicsWorld());
-        // physicsWorld->getPhysicsSystem().SetGravity(JPH::Vec3(0, 0, 0));
-        //
-        physicsWorld->setOnCollisionEnter([this](const JPH::BodyID body0, const JPH::BodyID body1) {
-                if (auto bulletIter = std::find_if(bullets.begin(), bullets.end(),
-                            [body0](const auto& bullet) { return bullet.bodyID == body0; });
-                        bulletIter != bullets.end())
-                {
-                    physicsWorld->getPhysicsSystem().GetBodyInterface().RemoveBody(body0);
-                    physicsWorld->getPhysicsSystem().GetBodyInterface().DestroyBody(body0);
-                    bullets.erase(bulletIter);
-
-                    if (physicsWorld->getPhysicsSystem().GetBodyInterface().GetObjectLayer(body1) == 0)
-                    {
-                        const auto [ idPair, contact ] = physicsWorld->getContacts(body0, body1).front();
-                        bool first = idPair.GetBody1ID() == body0;
-
-                        decals.push_back(eng::Decal {
-                                .position = jph_to_glm(first ? contact.GetWorldSpaceContactPointOn2(0) : contact.GetWorldSpaceContactPointOn1(0)),
-                                .scale = glm::vec3(1, 1, 0.05),
-                                .rotation = glm::rotation(glm::vec3(0, 0, -1), jph_to_glm(contact.mWorldSpaceNormal)) * glm::angleAxis(glm::linearRand(0.0f, glm::pi<float>()), glm::vec3(0, 0, 1)),
-                                .textureIndex = textures.splat,
-                            });
-                    }
-
-                    else if (auto enemyIter = std::find_if(enemies.begin(), enemies.end(),
-                                [body1](const auto& enemy) { return enemy.character->GetBodyID() == body1; });
-                            enemyIter != enemies.end())
-                    {
-                        enemyIter->state = Enemy::State::Damaged;
-                    }
-                }
-            });
-
         textures = {
             .blank = resourceLoader.loadTexture("resources/textures/blank.png"),
             .blood = resourceLoader.loadTexture("resources/textures/blood.png"),
@@ -345,23 +212,95 @@ struct GameLogic final : eng::GameLogicInterface, public JPH::CharacterContactLi
             },
         };
 
+        dungeons.reserve(numDungeons);
+        dungeonGeometryResources.reserve(numDungeons);
+        for (int i = 0; i < numDungeons; ++i)
+        {
+            auto dungeon = Dungeon::generate(Dungeon::GenerationParams {
+                        .seed = static_cast<uint64_t>(time(0)),
+                        .width = 60,
+                        .height = 40,
+                        .partitionedRoomCount = 35,
+                        .targetRoomCount = 12,
+                        .minSplitDimension = 6,
+                        .minPortalOverlap = 2,
+                    });
+            dungeonGeometryResources.push_back(resourceLoader.createGeometry(dungeon.createGeometry(3, 1.0f, 0.5f, 2)));
+            dungeons.push_back(std::move(dungeon));
+        }
+    }
+};
+
+struct GameSceneRunner : public JPH::CharacterContactListener
+{
+    const GameCommon& common;
+    uint32_t dungeonIndex;
+
+    const float movementSpeed = 7.0f;
+    const float slideSpeed = 12.0f;
+    const float cosineThresholdCardinal = glm::cos(glm::radians(22.5));
+    const uint32_t animationFPS = 8;
+    const float shootCooldown = 0.4f;
+    const float slideCooldown = 0.4f;
+    const glm::vec3 bulletOrigin = glm::vec3(0.0625, 0, -0.5);
+    const float bulletSpeed = 20.0f;
+    const float bulletRadius = 0.05f;
+    const float enemyDamageCooldown = 0.6f;
+    const int playerMaxHealth = 10;
+    const float slideTime = 3.0f;
+    const float shootTime = 2.0f;
+    const glm::vec2 fontTexCoordScale = { 1.0f / 16.0f, 1.0f / 8.0f };
+
+    std::unique_ptr<fff::PhysicsWorldInterface> physicsWorld;
+
+    std::vector<JPH::Ref<JPH::Shape>> shapeRefs;
+    JPH::Ref<JPH::CharacterVirtual> playerCharacter;
+    JPH::Ref<JPH::Shape> bulletShape;
+    JPH::Ref<JPH::Shape> characterShape;
+
+    std::vector<Enemy> enemies;
+    std::vector<eng::Light> lights;
+    std::vector<eng::Decal> decals;
+    std::vector<Bullet> bullets;
+
+    uint32_t animationCounter = 0;
+    double animationTimer = 0;
+
+    glm::vec3 cameraPosition = { 0, 2, 0 };
+    float playerAngle = 0;
+    PlayerStates::PlayerStates playerState = PlayerStates::Idle;
+    PlayerStates::PlayerStates lastPlayerState = PlayerStates::Initial;
+    float playerStateTimer = 0;
+    glm::vec3 playerSlideVelocity = glm::vec3(0);
+
+    CooldownTrigger shootTrigger;
+    CooldownTrigger slideTrigger;
+
+    int playerHealth = playerMaxHealth;
+
+    enum class State
+    {
+        Running,
+        GameOver,
+        Completed,
+    } state = State::Running;
+
+    GameSceneRunner(const GameCommon& common, uint32_t dungeonIndex) :
+        common(common),
+        dungeonIndex(dungeonIndex)
+    {
+        physicsWorld.reset(fff::createPhysicsWorld());
+        physicsWorld->setOnCollisionEnter([this](const JPH::BodyID body0, const JPH::BodyID body1) {
+                onCollisionEnter(body0, body1);
+            });
+
         shootTrigger.cooldown = shootCooldown;
-        shootTrigger.inputs = inputMappings.shoot;
+        shootTrigger.inputs = common.inputMappings.shoot;
 
         slideTrigger.cooldown = slideCooldown;
-        slideTrigger.inputs = inputMappings.slide;
+        slideTrigger.inputs = common.inputMappings.slide;
 
-        auto dungeon = Dungeon::generate(Dungeon::GenerationParams {
-                    .seed = static_cast<uint64_t>(time(0)),
-                    .width = 60,
-                    .height = 40,
-                    .partitionedRoomCount = 35,
-                    .targetRoomCount = 12,
-                    .minSplitDimension = 6,
-                    .minPortalOverlap = 2,
-                });
-        dungeonGeometryResource = resourceLoader.createGeometry(dungeon.createGeometry(3, 1.0f, 0.5f, 2));
-
+        const auto& dungeon = common.dungeons[dungeonIndex];
         std::vector<JPH::BodyID> mapBodies;
         dungeon.createPhysicsBodies(2, 1, 0.5, mapBodies, shapeRefs, physicsWorld->getPhysicsSystem());
 
@@ -416,128 +355,91 @@ struct GameLogic final : eng::GameLogicInterface, public JPH::CharacterContactLi
         playerCharacter->SetListener(this);
 
         bulletShape = shapeRefs.emplace_back(new JPH::SphereShape(bulletRadius));
-
-        // app.setWantsCursorLock(true);
     }
 
-    void render(eng::SceneInterface& scene)
+    ~GameSceneRunner()
     {
-        const auto [framebufferWidth, framebufferHeight] = scene.framebufferSize();
-        const float aspectRatio = static_cast<float>(framebufferWidth) / static_cast<float>(framebufferHeight);
-
-        scene.layers().resize(2);
-
-        auto& sceneLayer = scene.layers()[0];
-        sceneLayer.spriteInstances.clear();
-        sceneLayer.geometryInstances.clear();
-        sceneLayer.overlaySpriteInstances.clear();
-        sceneLayer.view = glm::translate(glm::lookAt(glm::vec3(0), glm::vec3(0, -1, 0), glm::vec3(0, 0, -1)), -cameraPosition);
-        sceneLayer.viewport = { .offset = { 0, framebufferHeight }, .extent = { framebufferWidth, -static_cast<float>(framebufferHeight) } };
-        sceneLayer.scissor = { .extent = { framebufferWidth, framebufferHeight } };
-        sceneLayer.projection = glm::perspectiveRH_ZO(0.25f * glm::pi<float>(), aspectRatio, 0.1f, 100.f);
-        sceneLayer.lights.assign(lights.begin(), lights.end());
-        sceneLayer.ambientLight = glm::vec3(0.1);
-
-        sceneLayer.geometryInstances.push_back(eng::GeometryInstance {
-                    .textureIndex = textures.floor,
-                    .geometryIndex = dungeonGeometryResource,
-                });
-
-        sceneLayer.decals.clear();
-        sceneLayer.decals.insert(sceneLayer.decals.end(), decals.begin(), decals.end());
-
-        for (uint32_t i = 0; i < enemies.size(); ++i)
+        for (auto& enemy : enemies)
         {
-            const auto& enemy = enemies[i];
+            enemy.character->RemoveFromPhysicsSystem();
+        }
+        enemies.clear();
+        playerCharacter = nullptr;
+        shapeRefs.clear();
+        physicsWorld.reset();
+    }
 
-            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
-                        .position = enemy.position,
-                        .scale = glm::vec3(0.5),
-                        .angle = enemy.angle,
-                        .textureIndex = textures.spiderWalk[animationCounter % textures.spiderWalk.size()],
-                        .tintColor = enemy.state == Enemy::State::Damaged ? glm::vec4(1.0, 0.5, 0.5, 1.0) : glm::vec4(1.0),
-                    });
-
-            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
-                        .position = enemy.position + glm::vec3(0, 0, 0.3f),
-                        .scale = 0.25f * glm::vec3(static_cast<float>(enemy.health) / enemy.maxHealth, 0.1f, 0),
-                        .textureIndex = textures.blank,
-                        .tintColor = glm::vec4(1, 0, 0, 1),
-                    });
+    void updatePlayerPosition(const glm::vec2& moveInput, const float deltaTime)
+    {
+        glm::vec3 direction(0);
+        if (glm::dot(moveInput, moveInput) > glm::epsilon<float>())
+        {
+            const glm::vec3 forward = glm::vec3(0, 0, -1);
+            const glm::vec3 right = glm::vec3(1, 0, 0);
+            direction = moveInput.y * forward + moveInput.x * right;
+            if (auto len = glm::length(direction); len > 1.0f)
+            {
+                direction /= len;
+            }
         }
 
-        if (!textures.player[playerState].empty())
-            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
-                        .position = jph_to_glm(playerCharacter->GetPosition()),
-                        .scale = glm::vec3(0.5),
-                        .angle = playerAngle,
-                        .textureIndex = textures.player[playerState][animationCounter % textures.player[playerState].size()],
-                    });
+        auto velocity = jph_to_glm(playerCharacter->GetLinearVelocity());
+        playerCharacter->SetLinearVelocity(glm_to_jph(movementSpeed * direction + glm::vec3(0, velocity.y, 0)));
+    }
 
-        for (const auto& bullet : bullets)
+    // Player contact
+    void OnContactAdded(const JPH::CharacterVirtual* character, const JPH::BodyID& bodyID1, const JPH::SubShapeID& subShapeID1,
+            const JPH::RVec3Arg contactPosition, const JPH::Vec3Arg contactNormal, JPH::CharacterContactSettings& ioSettings) override
+    {
+        if (auto bulletIter = std::find_if(bullets.begin(), bullets.end(),
+                    [bodyID1](const auto& bullet) { return bullet.bodyID == bodyID1; });
+                bulletIter != bullets.end())
         {
-            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
-                        .position = jph_to_glm(physicsWorld->getPhysicsSystem().GetBodyInterface().GetPosition(bullet.bodyID)),
-                        .scale = glm::vec3(0.5f),
-                        .angle = bullet.angle,
-                        .textureIndex = bullet.friendly ? textures.bullet[animationCounter % textures.bullet.size()]
-                            : textures.spiderBullet[animationCounter % textures.spiderBullet.size()],
-                    });
-        }
+            physicsWorld->getPhysicsSystem().GetBodyInterface().RemoveBody(bodyID1);
+            physicsWorld->getPhysicsSystem().GetBodyInterface().DestroyBody(bodyID1);
+            bullets.erase(bulletIter);
 
-        sceneLayer.lights.push_back(eng::Light {
-                    .position = jph_to_glm(playerCharacter->GetPosition()) + glm::angleAxis(playerAngle, glm::vec3(0, 1, 0)) * glm::vec3(0.25, 1, 0),
-                    .intensity = glm::vec3(1),
-                });
-
-        auto& overlayLayer = scene.layers()[1];
-        overlayLayer.spriteInstances.clear();
-        overlayLayer.geometryInstances.clear();
-        overlayLayer.overlaySpriteInstances.clear();
-        overlayLayer.viewport = { .offset = { 0, framebufferHeight }, .extent = { framebufferWidth, -static_cast<float>(framebufferHeight) } };
-        overlayLayer.scissor = { .extent = { framebufferWidth, framebufferHeight } };
-        overlayLayer.projection = glm::orthoRH_ZO(-aspectRatio, aspectRatio, -1.0f, 1.0f, -1.0f, 1.0f);
-        overlayLayer.ambientLight = glm::vec3(1);
-        
-        std::string text = (std::stringstream{} << "enemies remaining: " << enemies.size()).str();
-        const glm::vec2 textPos(-0.5, -0.875);
-        const float textScale = 0.1;
-        const float fontAspect = fontTexCoordScale.x / fontTexCoordScale.y;
-        overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
-                .position = glm::vec3(textPos.x + 0.5 * text.size() * fontAspect * textScale, -textPos.y - 0.5 * textScale, 0),
-                .scale = 0.5f * textScale * glm::vec3(fontAspect * text.size(), 1, 1),
-                .textureIndex = textures.blank,
-                .tintColor = glm::vec4(0, 0, 0, 1),
-            });
-
-        for (uint32_t i = 0; i < text.size(); ++i)
-        {
-            glm::vec2 minTexCoord = glm::vec2(text[i] / 8, text[i] % 8) * fontTexCoordScale;
-            overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
-                    .position = glm::vec3(textPos.x + (i + 0.5) * fontAspect * textScale, -textPos.y - 0.5 * textScale, 0),
-                    .scale = 0.5f * textScale * glm::vec3(fontAspect, 1, 1),
-                    .minTexCoord = minTexCoord,
-                    .texCoordScale = fontTexCoordScale,
-                    .textureIndex = textures.font,
-                    .tintColor = glm::vec4(1, 0, 0, 1),
-                });
-        }
-
-        const glm::vec2 healthPos(-aspectRatio + 0.1, 0.8);
-        const float healthScale = 0.1f;
-        const float healthSpacing = 0.15f;
-        for (int i = 0; i < playerHealth; ++i)
-        {
-            overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
-                    .position = glm::vec3(healthPos.x + 0.5 * healthScale + i * healthSpacing, -healthPos.y - 0.5 * healthScale, 0),
-                    .scale = glm::vec3(0.5f * healthScale),
-                    .textureIndex = textures.blank,
-                    .tintColor = glm::vec4(1, 0, 0, 1),
-                });
+            if (character == playerCharacter && playerState != PlayerStates::Slide)
+            {
+                playerState = PlayerStates::Damaged;
+            }
         }
     }
 
-    void runFrame(eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio, const double deltaTime) override
+    // generic bodies
+    void onCollisionEnter(const JPH::BodyID body0, const JPH::BodyID body1)
+    {
+        if (auto bulletIter = std::find_if(bullets.begin(), bullets.end(),
+                    [body0](const auto& bullet) { return bullet.bodyID == body0; });
+                bulletIter != bullets.end())
+        {
+            physicsWorld->getPhysicsSystem().GetBodyInterface().RemoveBody(body0);
+            physicsWorld->getPhysicsSystem().GetBodyInterface().DestroyBody(body0);
+            bullets.erase(bulletIter);
+
+            if (physicsWorld->getPhysicsSystem().GetBodyInterface().GetObjectLayer(body1) == 0)
+            {
+                const auto [ idPair, contact ] = physicsWorld->getContacts(body0, body1).front();
+                bool first = idPair.GetBody1ID() == body0;
+
+                decals.push_back(eng::Decal {
+                        .position = jph_to_glm(first ? contact.GetWorldSpaceContactPointOn2(0) : contact.GetWorldSpaceContactPointOn1(0)),
+                        .scale = glm::vec3(1, 1, 0.05),
+                        .rotation = glm::rotation(glm::vec3(0, 0, -1), jph_to_glm(contact.mWorldSpaceNormal)) * glm::angleAxis(glm::linearRand(0.0f, glm::pi<float>()), glm::vec3(0, 0, 1)),
+                        .textureIndex = common.textures.splat,
+                    });
+            }
+
+            else if (auto enemyIter = std::find_if(enemies.begin(), enemies.end(),
+                        [body1](const auto& enemy) { return enemy.character->GetBodyID() == body1; });
+                    enemyIter != enemies.end())
+            {
+                enemyIter->state = Enemy::State::Damaged;
+            }
+        }
+    }
+
+    void runFrame(eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio, const double deltaTime)
     {
         animationTimer += deltaTime;
         while (animationTimer >= 1.0 / animationFPS)
@@ -548,22 +450,22 @@ struct GameLogic final : eng::GameLogicInterface, public JPH::CharacterContactLi
 
         const auto [windowWidth, windowHeight] = app.getWindowSize();
         const glm::vec2 mouseLookInput = {
-            input.getReal(inputMappings.mouseLookX) - 0.5f * windowWidth,
-            input.getReal(inputMappings.mouseLookY) - 0.5f * windowHeight,
+            input.getReal(common.inputMappings.mouseLookX) - 0.5f * windowWidth,
+            input.getReal(common.inputMappings.mouseLookY) - 0.5f * windowHeight,
         };
 
         const glm::vec2 gamepadLookInput = {
-            input.getReal(inputMappings.gpRightStickXAxis),
-            input.getReal(inputMappings.gpRightStickYAxis),
+            input.getReal(common.inputMappings.gpRightStickXAxis),
+            input.getReal(common.inputMappings.gpRightStickYAxis),
         };
 
         const glm::vec2 keyboardMoveInput = {
-            static_cast<float>(input.getBoolean(inputMappings.right)) - static_cast<float>(input.getBoolean(inputMappings.left)),
-            static_cast<float>(input.getBoolean(inputMappings.forward)) - static_cast<float>(input.getBoolean(inputMappings.back))
+            static_cast<float>(input.getBoolean(common.inputMappings.right)) - static_cast<float>(input.getBoolean(common.inputMappings.left)),
+            static_cast<float>(input.getBoolean(common.inputMappings.forward)) - static_cast<float>(input.getBoolean(common.inputMappings.back))
         };
 
         const glm::vec2 gamepadMoveInput = {
-            input.getReal(inputMappings.gpLeftStickXAxis), -input.getReal(inputMappings.gpLeftStickYAxis),
+            input.getReal(common.inputMappings.gpLeftStickXAxis), -input.getReal(common.inputMappings.gpLeftStickYAxis),
         };
 
         shootTrigger.update(input, deltaTime);
@@ -621,6 +523,8 @@ struct GameLogic final : eng::GameLogicInterface, public JPH::CharacterContactLi
             else if (playerState == PlayerStates::Dead)
             {
                 audio.createSingleShot("resources/audio/Gameoverfx.wav");
+                state = State::GameOver;
+                return;
             }
 
             lastPlayerState = playerState;
@@ -629,7 +533,7 @@ struct GameLogic final : eng::GameLogicInterface, public JPH::CharacterContactLi
 
         if (playerState == PlayerStates::Damaged)
         {
-            if (playerStateTimer > static_cast<float>(textures.player[PlayerStates::Damaged].size()) / animationFPS)
+            if (playerStateTimer > static_cast<float>(common.textures.player[PlayerStates::Damaged].size()) / animationFPS)
             {
                 if (playerHealth > 0)
                     playerState = PlayerStates::Idle;
@@ -770,7 +674,7 @@ struct GameLogic final : eng::GameLogicInterface, public JPH::CharacterContactLi
                                     .position = jph_to_glm(position),
                                     .scale = glm::vec3(1, 1, 0.05),
                                     .rotation = glm::rotation(glm::vec3(0, 0, -1), jph_to_glm(normal)) * glm::angleAxis(glm::linearRand(0.0f, glm::pi<float>()), glm::vec3(0, 0, 1)),
-                                    .textureIndex = textures.blood,
+                                    .textureIndex = common.textures.blood,
                                 });
                         }
                     }
@@ -854,6 +758,7 @@ struct GameLogic final : eng::GameLogicInterface, public JPH::CharacterContactLi
         }
 
         std::erase_if(enemies, [](const auto& enemy){ return enemy.lastState == Enemy::State::Dead; });
+        if (enemies.empty()) state = State::Completed;
 
         physicsWorld->update(deltaTime);
 
@@ -878,20 +783,187 @@ struct GameLogic final : eng::GameLogicInterface, public JPH::CharacterContactLi
         physicsWorld->updateCharacter(*playerCharacter, deltaTime);
 
         cameraPosition = jph_to_glm(playerCharacter->GetPosition()) + glm::vec3(0, 5, 0);
+    }
 
-        render(scene);
+    void render(eng::SceneInterface& scene)
+    {
+        const auto [framebufferWidth, framebufferHeight] = scene.framebufferSize();
+        const float aspectRatio = static_cast<float>(framebufferWidth) / static_cast<float>(framebufferHeight);
+
+        scene.layers().resize(2);
+
+        auto& sceneLayer = scene.layers()[0];
+        sceneLayer.spriteInstances.clear();
+        sceneLayer.geometryInstances.clear();
+        sceneLayer.overlaySpriteInstances.clear();
+        sceneLayer.view = glm::translate(glm::lookAt(glm::vec3(0), glm::vec3(0, -1, 0), glm::vec3(0, 0, -1)), -cameraPosition);
+        sceneLayer.viewport = { .offset = { 0, framebufferHeight }, .extent = { framebufferWidth, -static_cast<float>(framebufferHeight) } };
+        sceneLayer.scissor = { .extent = { framebufferWidth, framebufferHeight } };
+        sceneLayer.projection = glm::perspectiveRH_ZO(0.25f * glm::pi<float>(), aspectRatio, 0.1f, 100.f);
+        sceneLayer.lights.assign(lights.begin(), lights.end());
+        sceneLayer.ambientLight = glm::vec3(0.1);
+
+        sceneLayer.geometryInstances.push_back(eng::GeometryInstance {
+                    .textureIndex = common.textures.floor,
+                    .geometryIndex = common.dungeonGeometryResources[dungeonIndex],
+                });
+
+        sceneLayer.decals.clear();
+        sceneLayer.decals.insert(sceneLayer.decals.end(), decals.begin(), decals.end());
+
+        for (uint32_t i = 0; i < enemies.size(); ++i)
+        {
+            const auto& enemy = enemies[i];
+
+            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
+                        .position = enemy.position,
+                        .scale = glm::vec3(0.5),
+                        .angle = enemy.angle,
+                        .textureIndex = common.textures.spiderWalk[animationCounter % common.textures.spiderWalk.size()],
+                        .tintColor = enemy.state == Enemy::State::Damaged ? glm::vec4(1.0, 0.5, 0.5, 1.0) : glm::vec4(1.0),
+                    });
+
+            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
+                        .position = enemy.position + glm::vec3(0, 0, 0.3f),
+                        .scale = 0.25f * glm::vec3(static_cast<float>(enemy.health) / enemy.maxHealth, 0.1f, 0),
+                        .textureIndex = common.textures.blank,
+                        .tintColor = glm::vec4(1, 0, 0, 1),
+                    });
+        }
+
+        if (!common.textures.player[playerState].empty())
+            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
+                        .position = jph_to_glm(playerCharacter->GetPosition()),
+                        .scale = glm::vec3(0.5),
+                        .angle = playerAngle,
+                        .textureIndex = common.textures.player[playerState][animationCounter % common.textures.player[playerState].size()],
+                    });
+
+        for (const auto& bullet : bullets)
+        {
+            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
+                        .position = jph_to_glm(physicsWorld->getPhysicsSystem().GetBodyInterface().GetPosition(bullet.bodyID)),
+                        .scale = glm::vec3(0.5f),
+                        .angle = bullet.angle,
+                        .textureIndex = bullet.friendly ? common.textures.bullet[animationCounter % common.textures.bullet.size()]
+                            : common.textures.spiderBullet[animationCounter % common.textures.spiderBullet.size()],
+                    });
+        }
+
+        sceneLayer.lights.push_back(eng::Light {
+                    .position = jph_to_glm(playerCharacter->GetPosition()) + glm::angleAxis(playerAngle, glm::vec3(0, 1, 0)) * glm::vec3(0.25, 1, 0),
+                    .intensity = glm::vec3(1),
+                });
+
+        auto& overlayLayer = scene.layers()[1];
+        overlayLayer.spriteInstances.clear();
+        overlayLayer.geometryInstances.clear();
+        overlayLayer.overlaySpriteInstances.clear();
+        overlayLayer.viewport = { .offset = { 0, framebufferHeight }, .extent = { framebufferWidth, -static_cast<float>(framebufferHeight) } };
+        overlayLayer.scissor = { .extent = { framebufferWidth, framebufferHeight } };
+        overlayLayer.projection = glm::orthoRH_ZO(-aspectRatio, aspectRatio, -1.0f, 1.0f, -1.0f, 1.0f);
+        overlayLayer.ambientLight = glm::vec3(1);
+        
+        std::string text = (std::stringstream{} << "enemies remaining: " << enemies.size()).str();
+        const glm::vec2 textPos(-0.5, -0.875);
+        const float textScale = 0.1;
+        const float fontAspect = fontTexCoordScale.x / fontTexCoordScale.y;
+        overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
+                .position = glm::vec3(textPos.x + 0.5 * text.size() * fontAspect * textScale, -textPos.y - 0.5 * textScale, 0),
+                .scale = 0.5f * textScale * glm::vec3(fontAspect * text.size(), 1, 1),
+                .textureIndex = common.textures.blank,
+                .tintColor = glm::vec4(0, 0, 0, 1),
+            });
+
+        for (uint32_t i = 0; i < text.size(); ++i)
+        {
+            glm::vec2 minTexCoord = glm::vec2(text[i] / 8, text[i] % 8) * fontTexCoordScale;
+            overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
+                    .position = glm::vec3(textPos.x + (i + 0.5) * fontAspect * textScale, -textPos.y - 0.5 * textScale, 0),
+                    .scale = 0.5f * textScale * glm::vec3(fontAspect, 1, 1),
+                    .minTexCoord = minTexCoord,
+                    .texCoordScale = fontTexCoordScale,
+                    .textureIndex = common.textures.font,
+                    .tintColor = glm::vec4(1, 0, 0, 1),
+                });
+        }
+
+        const glm::vec2 healthPos(-aspectRatio + 0.1, 0.8);
+        const float healthScale = 0.1f;
+        const float healthSpacing = 0.15f;
+        for (int i = 0; i < playerHealth; ++i)
+        {
+            overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
+                    .position = glm::vec3(healthPos.x + 0.5 * healthScale + i * healthSpacing, -healthPos.y - 0.5 * healthScale, 0),
+                    .scale = glm::vec3(0.5f * healthScale),
+                    .textureIndex = common.textures.blank,
+                    .tintColor = glm::vec4(1, 0, 0, 1),
+                });
+        }
+    }
+};
+
+struct GameLogic final : eng::GameLogicInterface
+{
+    const int numDungeons = 3;
+    int currentDungeon = 0;
+    std::unique_ptr<GameCommon> common;
+    std::unique_ptr<GameSceneRunner> sceneRunner;
+
+    std::vector<uint32_t> anyActionInputs;
+    uint32_t titleThemeAudio;
+
+    void init(eng::ResourceLoaderInterface& resourceLoader, eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio) override
+    {
+        titleThemeAudio = audio.createLoop("resources/audio/GasStationThemereal.wav");
+
+        common.reset(new GameCommon(resourceLoader, input));
+        anyActionInputs = {
+            input.mapAnyKey(input.createMapping()),
+            input.mapAnyMouseButton(input.createMapping()),
+            input.mapAnyGamepadButton(input.createMapping()),
+        };
+    }
+
+    void runFrame(eng::SceneInterface& scene, eng::InputInterface& input, eng::AppInterface& app, eng::AudioInterface& audio, const double deltaTime) override
+    {
+        if (sceneRunner)
+        {
+            sceneRunner->runFrame(input, app, audio, deltaTime);
+            if (sceneRunner->state == GameSceneRunner::State::Running)
+            {
+                sceneRunner->render(scene);
+            }
+            else if (sceneRunner->state == GameSceneRunner::State::Completed)
+            {
+                if (currentDungeon < numDungeons)
+                {
+                    sceneRunner.reset(new GameSceneRunner(*common, currentDungeon++));
+                }
+                else
+                {
+                    currentDungeon = 0;
+                    sceneRunner.reset();
+                }
+            }
+            else if (sceneRunner->state == GameSceneRunner::State::GameOver)
+            {
+                currentDungeon = 0;
+                sceneRunner.reset();
+            }
+        }
+        else if (std::reduce(anyActionInputs.begin(), anyActionInputs.end(), false, [&](const bool state, const uint32_t mapping) {
+                        return state || input.getBoolean(mapping);
+                    }))
+        {
+            sceneRunner.reset(new GameSceneRunner(*common, currentDungeon++));
+        }
     }
 
     void cleanup() override
     {
-        for (auto& enemy : enemies)
-        {
-            enemy.character->RemoveFromPhysicsSystem();
-        }
-        enemies.clear();
-        playerCharacter = nullptr;
-        shapeRefs.clear();
-        physicsWorld.reset();
+        sceneRunner.reset();
+        common.reset();
     }
 };
 

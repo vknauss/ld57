@@ -6,7 +6,7 @@ struct GLFWwindow;
 
 namespace eng
 {
-    class InputManager : public InputInterface
+    class InputManager final : public InputInterface
     {
         enum class InputType
         {
@@ -81,6 +81,9 @@ namespace eng
         uint32_t mapCursor(const uint32_t mapping, const CursorAxis axis, const RealStateEvent event, const float param) override;
         uint32_t mapGamepadAxis(const uint32_t mapping, const int axis, const RealStateEvent, const float param) override;
         uint32_t mapGamepadButton(const uint32_t mapping, const int button, const BoolStateEvent) override;
+        uint32_t mapAnyKey(const uint32_t mapping, const BoolStateEvent event) override;
+        uint32_t mapAnyMouseButton(const uint32_t mapping, const BoolStateEvent event) override;
+        uint32_t mapAnyGamepadButton(const uint32_t mapping, const BoolStateEvent event) override;
 
         bool getBoolean(const uint32_t mapping) const override;
         double getReal(const uint32_t mapping) const override;

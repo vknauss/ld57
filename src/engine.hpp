@@ -121,6 +121,9 @@ namespace eng
         virtual uint32_t mapCursor(const uint32_t mapping, const CursorAxis axis, const RealStateEvent event = RealStateEvent::Value, const float param = 0) = 0;
         virtual uint32_t mapGamepadAxis(const uint32_t mapping, const int axis, const RealStateEvent = RealStateEvent::Value, const float param = 0) = 0;
         virtual uint32_t mapGamepadButton(const uint32_t mapping, const int button, const BoolStateEvent = BoolStateEvent::Down) = 0;
+        virtual uint32_t mapAnyKey(const uint32_t mapping, const BoolStateEvent event = BoolStateEvent::Down) = 0;
+        virtual uint32_t mapAnyMouseButton(const uint32_t mapping, const BoolStateEvent event = BoolStateEvent::Down) = 0;
+        virtual uint32_t mapAnyGamepadButton(const uint32_t mapping, const BoolStateEvent event = BoolStateEvent::Down) = 0;
 
         virtual bool getBoolean(const uint32_t mapping) const = 0;
         virtual double getReal(const uint32_t mapping) const = 0;
