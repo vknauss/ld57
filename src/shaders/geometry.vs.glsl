@@ -5,7 +5,7 @@ layout(location = 1) in vec2 v_texCoord;
 layout(location = 2) in vec3 v_normal;
 layout(location = 0) out vec2 texCoord;
 layout(location = 1) out flat uint textureIndex;
-layout(location = 2) out vec3 tintColor;
+layout(location = 2) out vec4 tintColor;
 layout(location = 3) out vec3 position;
 layout(location = 4) out vec3 normal;
 
@@ -20,7 +20,7 @@ struct Instance
     vec2 texCoordOffset;
     uint textureIndex;
     float pad0;
-    vec3 tintColor;
+    vec4 tintColor;
 };
 
 layout(std140, set = 2, binding = 0) readonly buffer InstanceData

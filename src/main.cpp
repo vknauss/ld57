@@ -160,6 +160,8 @@ struct GameCommon
         std::vector<uint32_t> spider[EnemyAnimationStates::MAX_VALUE];
         std::vector<uint32_t> hole;
         std::vector<uint32_t> muzzleFlash;
+        std::vector<uint32_t> dazed;
+        std::vector<uint32_t> dead;
     } textures;
 
     struct {
@@ -196,6 +198,8 @@ struct GameCommon
             .font = resourceLoader.loadTexture("resources/textures/font.png"),
             .hole = getIndexedTextures(resourceLoader, "resources/textures/hole/FloorFallingThruAnim{:}.png", 1, 8),
             .muzzleFlash = getIndexedTextures(resourceLoader, "resources/textures/muzzleflash/PCMuzzleFlash{:}.png", 1, 2),
+            .dazed = getIndexedTextures(resourceLoader, "resources/textures/dazed/DazedAnim{:}.png", 1, 3),
+            .dead = getIndexedTextures(resourceLoader, "resources/textures/death/DeathAnimation{:}.png", 1, 5),
         };
 
         for (uint32_t i = 0; i < PlayerStates::MAX_VALUE; ++i)
@@ -247,7 +251,7 @@ struct GameCommon
                         .seed = static_cast<uint64_t>(time(0)),
                         .width = 60,
                         .height = 40,
-                        .partitionedRoomCount = 25,
+                        .partitionedRoomCount = 35,
                         .targetRoomCount = 8,
                         .minSplitDimension = 6,
                         .minPortalOverlap = 2,
@@ -298,6 +302,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
     std::vector<Enemy> enemies;
     std::vector<eng::Decal> decals;
     std::vector<Bullet> bullets;
+    std::vector<std::pair<glm::vec3, uint32_t>> deathParticles;
 
     uint32_t animationCounter = 0;
     double animationTimer = 0;
@@ -753,6 +758,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                 else if (enemy.state == Enemy::State::Dead)
                 {
                     enemy.character->RemoveFromPhysicsSystem();
+                    deathParticles.emplace_back(enemy.position, animationCounter);
                 }
 
                 enemy.stateTime = 0;
@@ -853,6 +859,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         {
             playerState = PlayerStates::FallingInHole;
         }
+        std::erase_if(deathParticles, [&](const auto& e) { return animationCounter - e.second >= common.textures.dead.size(); });
 
         physicsWorld->update(deltaTime);
 
@@ -967,6 +974,15 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                         .intensity = glm::vec3(0, 0.5, 0.2),
                     });
         }
+        if (playerState == PlayerStates::Dazed)
+        {
+            sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
+                        .position = jph_to_glm(playerCharacter->GetPosition()),
+                        .scale = glm::vec3(0.5),
+                        .angle = playerAngle,
+                        .textureIndex = common.textures.dazed[animationCounter % common.textures.dazed.size()],
+                    });
+        }
 
         for (const auto& bullet : bullets)
         {
@@ -977,6 +993,19 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                         .textureIndex = bullet.friendly ? common.textures.bullet[animationCounter % common.textures.bullet.size()]
                             : common.textures.spiderBullet[animationCounter % common.textures.spiderBullet.size()],
                     });
+        }
+
+        for (const auto& [position, startFrame] : deathParticles)
+        {
+            uint32_t frame = animationCounter - startFrame;
+            if (frame < common.textures.dead.size())
+            {
+                sceneLayer.spriteInstances.push_back(eng::SpriteInstance {
+                            .position = position,
+                            .scale = glm::vec3(0.5f),
+                            .textureIndex = common.textures.dead[frame],
+                        });
+            }
         }
 
         sceneLayer.lights.push_back(eng::Light {
@@ -993,29 +1022,31 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         overlayLayer.projection = glm::orthoRH_ZO(-aspectRatio, aspectRatio, -1.0f, 1.0f, -1.0f, 1.0f);
         overlayLayer.ambientLight = glm::vec3(1);
         
-        std::string text = (std::stringstream{} << "enemies remaining: " << enemies.size()).str();
-        const glm::vec2 textPos(-0.5, -0.875);
-        const float textScale = 0.1;
-        const float fontAspect = fontTexCoordScale.x / fontTexCoordScale.y;
-        overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
-                .position = glm::vec3(textPos.x + 0.5 * text.size() * fontAspect * textScale, -textPos.y - 0.5 * textScale, 0),
-                .scale = 0.5f * textScale * glm::vec3(fontAspect * text.size(), 1, 1),
-                .textureIndex = common.textures.blank,
-                .tintColor = glm::vec4(0, 0, 0, 1),
-            });
-
-        for (uint32_t i = 0; i < text.size(); ++i)
+        auto drawText = [&](const std::string& text, const glm::vec2& position, const float scale, const glm::vec4& background, const glm::vec4& foreground)
         {
-            glm::vec2 minTexCoord = glm::vec2(text[i] / 8, text[i] % 8) * fontTexCoordScale;
+            const float fontAspect = fontTexCoordScale.x / fontTexCoordScale.y;
             overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
-                    .position = glm::vec3(textPos.x + (i + 0.5) * fontAspect * textScale, -textPos.y - 0.5 * textScale, 0),
-                    .scale = 0.5f * textScale * glm::vec3(fontAspect, 1, 1),
-                    .minTexCoord = minTexCoord,
-                    .texCoordScale = fontTexCoordScale,
-                    .textureIndex = common.textures.font,
-                    .tintColor = glm::vec4(1, 0, 0, 1),
+                    .position = glm::vec3(position.x + 0.5 * text.size() * fontAspect * scale, -position.y - 0.5 * scale, 0),
+                    .scale = 0.5f * scale * glm::vec3(fontAspect * text.size(), 1, 1),
+                    .textureIndex = common.textures.blank,
+                    .tintColor = background,
                 });
-        }
+
+            for (uint32_t i = 0; i < text.size(); ++i)
+            {
+                glm::vec2 minTexCoord = glm::vec2(text[i] / 8, text[i] % 8) * fontTexCoordScale;
+                overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
+                        .position = glm::vec3(position.x + (i + 0.5) * fontAspect * scale, -position.y - 0.5 * scale, 0),
+                        .scale = 0.5f * scale * glm::vec3(fontAspect, 1, 1),
+                        .minTexCoord = minTexCoord,
+                        .texCoordScale = fontTexCoordScale,
+                        .textureIndex = common.textures.font,
+                        .tintColor = foreground,
+                    });
+            }
+        };
+
+        drawText((std::stringstream{} << "enemies remaining: " << enemies.size()).str(), glm::vec2(-0.5, -0.875), 0.1, glm::vec4(0, 0, 0, 1), glm::vec4(1, 0, 0, 1));
 
         const glm::vec2 healthPos(-aspectRatio + 0.1, 0.8);
         const float healthScale = 0.1f;
@@ -1028,6 +1059,12 @@ struct GameSceneRunner : public JPH::CharacterContactListener
                     .textureIndex = common.textures.blank,
                     .tintColor = glm::vec4(1, 0, 0, 1),
                 });
+        }
+
+        if (playerState == PlayerStates::Dazed)
+        {
+            drawText((std::stringstream{} << "DUNGEON " << dungeonIndex + 1).str(),
+                    glm::vec2(-1, 0), 0.5, glm::vec4(0), glm::vec4(1, 0, 0, 1-lightIntensity/maxLightIntensity));
         }
     }
 };
@@ -1099,7 +1136,7 @@ struct GameLogic final: eng::GameLogicInterface
                 if (currentDungeon < numDungeons)
                 {
                     if (currentDungeon == 1) themeLoop = audio.createLoop("resources/audio/loop1real.wav");
-                    if (currentDungeon == 2) themeLoop = audio.createLoop("resources/audio/loop2real.wav");
+                    if (currentDungeon == 2) themeLoop = audio.createLoop("resources/audio/BossBattleMETALloopreal.wav");
                     sceneRunner.reset(new GameSceneRunner(*common, currentDungeon++));
                 }
                 else

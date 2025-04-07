@@ -164,5 +164,5 @@ void main()
     #ifdef DITHER_AO
     occlusion = float(occlusion + sampleBayer() >= 1.0);
     #endif
-    fragColor = vec4((lightColor + ambientLight * occlusion) * texColor.rgb, 1);
+    fragColor = vec4((lightColor + ambientLight * occlusion) * texColor.rgb, texColor.a);
 }

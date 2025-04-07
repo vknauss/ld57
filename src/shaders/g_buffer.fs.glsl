@@ -3,7 +3,7 @@
 
 layout(location = 0) in vec2 texCoord;
 layout(location = 1) in flat uint textureIndex;
-layout(location = 2) in vec3 tintColor;
+layout(location = 2) in vec4 tintColor;
 layout(location = 3) in vec3 position;
 layout(location = 4) in vec3 normal;
 
@@ -17,6 +17,6 @@ void main()
     vec4 texColor = texture(texSamplers[nonuniformEXT(textureIndex)], texCoord);
     if(texColor.a < 0.1) discard;
 
-    gBufferColor = vec4(tintColor * texColor.rgb, 1);
+    gBufferColor = vec4(tintColor * texColor);
     gBufferNormal = vec4(normalize(normal), 1);
 }
