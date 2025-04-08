@@ -42,11 +42,12 @@ static std::vector<uint32_t> getIndexedTextures(eng::ResourceLoaderInterface& re
     return values;
 }
 
-static void drawText(eng::SceneLayer& layer, const glm::vec2& fontTexCoordScale, const uint32_t fontTexture, const std::string& text, const glm::vec2& position, const float scale, const glm::vec4& background, const glm::vec4& foreground)
+static void drawText(eng::SceneLayer& layer, const glm::vec2& fontTexCoordScale, const uint32_t fontTexture, const std::string& text, const glm::vec2& position, const float scale, const glm::vec4& background, const glm::vec4& foreground, bool centered)
 {
     const float fontAspect = fontTexCoordScale.x / fontTexCoordScale.y;
+    const float offset = centered ? -0.5 * text.size() * fontAspect * scale : 0;
     layer.spriteInstances.push_back(eng::SpriteInstance {
-            .position = glm::vec3(position.x + 0.5 * text.size() * fontAspect * scale, -position.y - 0.5 * scale, 0),
+            .position = glm::vec3(position.x + offset + 0.5 * text.size() * fontAspect * scale, -position.y - 0.5 * scale, 0),
             .scale = 0.5f * scale * glm::vec3(fontAspect * text.size(), 1, 1),
             .tintColor = background,
         });
@@ -55,7 +56,7 @@ static void drawText(eng::SceneLayer& layer, const glm::vec2& fontTexCoordScale,
     {
         glm::vec2 minTexCoord = glm::vec2(text[i] / 8, text[i] % 8) * fontTexCoordScale;
         layer.spriteInstances.push_back(eng::SpriteInstance {
-                .position = glm::vec3(position.x + (i + 0.5) * fontAspect * scale, -position.y - 0.5 * scale, 0),
+                .position = glm::vec3(position.x + offset + (i + 0.5) * fontAspect * scale, -position.y - 0.5 * scale, 0),
                 .scale = 0.5f * scale * glm::vec3(fontAspect, 1, 1),
                 .minTexCoord = minTexCoord,
                 .texCoordScale = fontTexCoordScale,
@@ -173,7 +174,9 @@ struct GameCommon
         uint32_t blank;
         uint32_t blood;
         std::vector<uint32_t> floor;
-        uint32_t wall;
+        std::vector<uint32_t> wall;
+        std::vector<uint32_t> obstacle;
+        std::vector<uint32_t> obstacleTop;
         std::vector<uint32_t> bullet;
         std::vector<uint32_t> spiderBullet;
         uint32_t splat;
@@ -185,6 +188,7 @@ struct GameCommon
         std::vector<uint32_t> muzzleFlash;
         std::vector<uint32_t> dazed;
         std::vector<uint32_t> dead;
+        uint32_t hitpoint;
     } textures;
 
     struct {
@@ -214,7 +218,9 @@ struct GameCommon
             .blank = resourceLoader.loadTexture("resources/textures/blank.png"),
             .blood = resourceLoader.loadTexture("resources/textures/Goop1.png"),
             .floor = getIndexedTextures(resourceLoader, "resources/textures/floor/FloorTextures{:}.png", 1, numDungeons),
-            .wall = resourceLoader.loadTexture("resources/textures/woodWallTexture.png"),
+            .wall = getIndexedTextures(resourceLoader, "resources/textures/wall/Wall{:}.png", 1, numDungeons),
+            .obstacle = getIndexedTextures(resourceLoader, "resources/textures/obstacle/Obstacle{:}.png", 1, numDungeons),
+            .obstacleTop = getIndexedTextures(resourceLoader, "resources/textures/obstacleTop/Obstacle{:}.png", 1, numDungeons),
             .bullet = getIndexedTextures(resourceLoader, "resources/textures/pc_projectile/PCProjectile{:}.png", 1, 2),
             .spiderBullet = getIndexedTextures(resourceLoader, "resources/textures/spider/SpiderProjectile{:}.png", 2, 2),
             .splat = resourceLoader.loadTexture("resources/textures/Goop2.png"),
@@ -224,6 +230,7 @@ struct GameCommon
             .muzzleFlash = getIndexedTextures(resourceLoader, "resources/textures/muzzleflash/PCMuzzleFlash{:}.png", 1, 2),
             .dazed = getIndexedTextures(resourceLoader, "resources/textures/dazed/DazedAnim{:}.png", 1, 3),
             .dead = getIndexedTextures(resourceLoader, "resources/textures/death/DeathAnimation{:}.png", 1, 5),
+            .hitpoint = resourceLoader.loadTexture("resources/textures/hitpoint.png"),
         };
 
         for (uint32_t i = 0; i < PlayerStates::MAX_VALUE; ++i)
@@ -283,9 +290,9 @@ struct GameCommon
             auto geometry = dungeon.createGeometry(3, 1.0f, 0.5f, 2, 1);
             dungeonGeometryResourcePairs.push_back({
                     { textures.floor[i], resourceLoader.createGeometry(geometry.floor) },
-                    { textures.wall, resourceLoader.createGeometry(geometry.walls) },
-                    { textures.wall, resourceLoader.createGeometry(geometry.obstacleSides) },
-                    { textures.wall, resourceLoader.createGeometry(geometry.obstacleTops) },
+                    { textures.wall[i], resourceLoader.createGeometry(geometry.walls) },
+                    { textures.obstacle[i], resourceLoader.createGeometry(geometry.obstacleSides) },
+                    { textures.obstacleTop[i], resourceLoader.createGeometry(geometry.obstacleTops) },
                 });
             dungeons.push_back(std::move(dungeon));
         }
@@ -315,6 +322,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
     const float maxAmbientLightIntensity = 0.1;
     const float minAmbientLightIntensity = 0.001;
     const float tutorialTime = 8.0;
+    const float counterOverlayTime = 3.0f;
 
     std::unique_ptr<fff::PhysicsWorldInterface> physicsWorld;
 
@@ -346,6 +354,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
     uint32_t holeAnimationOffset = 0;
     float lightIntensity = 0;
     float ambientLightIntensity = minAmbientLightIntensity;
+    float counterOverlayTimeStamp = 0;
 
     enum class State
     {
@@ -605,7 +614,6 @@ struct GameSceneRunner : public JPH::CharacterContactListener
             {
                 if (playerHealth > 0)
                 {
-                    std::cout << playerHealth << std::endl;
                     playerState = PlayerStates::Idle;
                 }
                 else
@@ -896,9 +904,13 @@ struct GameSceneRunner : public JPH::CharacterContactListener
             }
         }
 
-        if (std::erase_if(enemies, [](const auto& enemy){ return enemy.lastState == Enemy::State::Dead; }) && enemies.empty())
+        if (std::erase_if(enemies, [](const auto& enemy){ return enemy.lastState == Enemy::State::Dead; }))
         {
-            playerState = PlayerStates::FallingInHole;
+            counterOverlayTimeStamp = animationTimer;
+            if (enemies.empty())
+            {
+                playerState = PlayerStates::FallingInHole;
+            }
         }
         std::erase_if(deathParticles, [&](const auto& e) { return animationCounter - e.second >= common.textures.dead.size(); });
 
@@ -1063,9 +1075,12 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         overlayLayer.projection = glm::orthoRH_ZO(-aspectRatio, aspectRatio, -1.0f, 1.0f, -1.0f, 1.0f);
         overlayLayer.ambientLight = glm::vec3(1);
         
-        drawText(overlayLayer, common.fontTexCoordScale, common.textures.font,
-                (std::stringstream{} << "enemies remaining: " << enemies.size()).str(),
-                glm::vec2(-0.5, -0.875), 0.1, glm::vec4(0, 0, 0, 1), glm::vec4(1, 0, 0, 1));
+        if ((animationTimer - counterOverlayTimeStamp) < counterOverlayTime)
+        {
+            drawText(overlayLayer, common.fontTexCoordScale, common.textures.font,
+                    (std::stringstream{} << enemies.size() << " REMAINING").str(),
+                    glm::vec2(0, -0.875), 0.1, glm::vec4(0, 0, 0, 0), glm::vec4(1, 0, 0, std::min<float>(1, 2-2*(animationTimer - counterOverlayTimeStamp) / counterOverlayTime)), true);
+        }
 
         const glm::vec2 healthPos(-aspectRatio + 0.1, 0.8);
         const float healthScale = 0.1f;
@@ -1075,7 +1090,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
             overlayLayer.spriteInstances.push_back(eng::SpriteInstance {
                     .position = glm::vec3(healthPos.x + 0.5 * healthScale + i * healthSpacing, -healthPos.y - 0.5 * healthScale, 0),
                     .scale = glm::vec3(0.5f * healthScale),
-                    .textureIndex = common.textures.blank,
+                    .textureIndex = common.textures.hitpoint,
                     .tintColor = glm::vec4(1, 0, 0, 1),
                 });
         }
@@ -1084,14 +1099,14 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         {
             drawText(overlayLayer, common.fontTexCoordScale, common.textures.font,
                     (std::stringstream{} << "DUNGEON " << dungeonIndex + 1).str(),
-                    glm::vec2(-1, 0), 0.5, glm::vec4(0), glm::vec4(1, 0, 0, 1-lightIntensity/maxLightIntensity));
+                    glm::vec2(0, 0), 0.5, glm::vec4(0), glm::vec4(1, 0, 0, 1-lightIntensity/maxLightIntensity), true);
         }
 
         if (dungeonIndex == 0 && animationTimer < tutorialTime)
         {
             drawText(overlayLayer, common.fontTexCoordScale, common.textures.font,
                     "[WASD] Move | [Space] Slide | [Left Mouse] Shoot",
-                    glm::vec2(-1, 0.6), 0.1, glm::vec4(0), glm::vec4(1, 0, 0, std::min<float>(1, 2-2*animationTimer/tutorialTime)));
+                    glm::vec2(0, 0.6), 0.1, glm::vec4(0), glm::vec4(1, 0, 0, std::min<float>(1, 2-2*animationTimer/tutorialTime)), true);
         }
     }
 };
@@ -1272,7 +1287,7 @@ struct GameLogic final: eng::GameLogicInterface
             {
                 drawText(layer, common->fontTexCoordScale, common->textures.font,
                         "[Esc] Quit | [M] Toggle Mute | [F] Toggle Fullscreen",
-                        glm::vec2(-1, 0.875), 0.1, glm::vec4(0, 0, 0, 1), glm::vec4(1, 0, 0, 1));
+                        glm::vec2(0, 0.875), 0.1, glm::vec4(0, 0, 0, 1), glm::vec4(1, 0, 0, 1), true);
             }
         }
     }
