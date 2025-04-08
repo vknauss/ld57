@@ -1169,7 +1169,7 @@ struct GameLogic final: eng::GameLogicInterface
         };
 
         screens[Screens::Title] = getIndexedTextures(resourceLoader, "resources/textures/title/TITLESCREEN{:}.png", 1, 3);
-        screens[Screens::Lose] = { resourceLoader.loadTexture("resources/textures/gameover.png") };
+        screens[Screens::Lose] = getIndexedTextures(resourceLoader, "resources/textures/gameover/GameOver{:}.png", 4, 3);
         screens[Screens::Win] = { resourceLoader.loadTexture("resources/textures/win.png") };
     }
 
