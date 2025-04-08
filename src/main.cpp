@@ -1,5 +1,4 @@
 #include "engine.hpp"
-#include "obj_load.hpp"
 #include "physics.hpp"
 #include "dungeon.hpp"
 #include "jph_glm_convert.hpp"
