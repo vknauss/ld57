@@ -134,6 +134,7 @@ namespace eng
         virtual void setWantsCursorLock(const bool value) = 0;
         virtual void setWantsFullscreen(const bool value) = 0;
         virtual void requestQuit() = 0;
+        virtual void requestReload() = 0;
         virtual std::pair<uint32_t, uint32_t> getWindowSize() const = 0;
     };
 

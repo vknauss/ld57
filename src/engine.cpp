@@ -547,6 +547,7 @@ struct AppInterfaceProvider final : public AppInterface
 {
     SDL_Window* window;
     bool quitRequested = false;
+    bool reloadRequested = false;
 
     explicit AppInterfaceProvider(SDL_Window* window) :
         window(window)
@@ -568,12 +569,22 @@ struct AppInterfaceProvider final : public AppInterface
         quitRequested = true;
     }
 
+    void requestReload() override
+    {
+        reloadRequested = true;
+    }
+
     std::pair<uint32_t, uint32_t> getWindowSize() const override
     {
         int width, height;
         SDL_GetWindowSize(window, &width, &height);
         return { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
     }
+};
+
+enum class FrameResult
+{
+    Continue, Quit, Reload
 };
 
 class Application
@@ -715,7 +726,7 @@ public:
         return SDL_APP_CONTINUE;
     }
 
-    SDL_AppResult RunFrame()
+    FrameResult RunFrame()
     {
         auto time = SDL_GetTicksNS() * 1.e-9;
         gameLogic->runFrame(scene, inputManager, appInterface, audio, time - lastTime);
@@ -728,15 +739,20 @@ public:
         renderer.updateFrame(scene, geometry);
         renderer.drawFrame(swapchain, glm::vec2(scene.framebufferSize_.first, scene.framebufferSize_.second));
         inputManager.nextFrame();
-        return appInterface.quitRequested ? SDL_APP_SUCCESS : SDL_APP_CONTINUE;
+        return appInterface.quitRequested ? FrameResult::Quit :
+            appInterface.reloadRequested ? FrameResult::Reload :
+            FrameResult::Continue;
     }
 };
+
+struct AppWrap { std::unique_ptr<Application> app; };
 
 SDL_AppResult SDL_AppInit(void** appState, int argc, char** argv)
 {
     try
     {
-        *appState = new Application(EngineApp_GetApplicationInfo(), EngineApp_CreateGameLogic());
+        *appState = new AppWrap;
+        static_cast<AppWrap*>(*appState)->app.reset(new Application(EngineApp_GetApplicationInfo(), EngineApp_CreateGameLogic()));
         return SDL_APP_CONTINUE;
     }
     catch(std::exception& e)
@@ -750,7 +766,7 @@ SDL_AppResult SDL_AppEvent(void* appState, SDL_Event* event)
 {
     try
     {
-        return static_cast<Application*>(appState)->HandleEvent(*event);
+        return static_cast<AppWrap*>(appState)->app->HandleEvent(*event);
     }
     catch(std::exception& e)
     {
@@ -763,7 +779,17 @@ SDL_AppResult SDL_AppIterate(void* appState)
 {
     try
     {
-        return static_cast<Application*>(appState)->RunFrame();
+        SDL_AppResult appResult = SDL_APP_CONTINUE;
+        auto result = static_cast<AppWrap*>(appState)->app->RunFrame();
+        if (result == FrameResult::Quit)
+        {
+            appResult = SDL_APP_SUCCESS;
+        }
+        else if (result == FrameResult::Reload)
+        {
+            static_cast<AppWrap*>(appState)->app.reset(new Application(EngineApp_GetApplicationInfo(), EngineApp_CreateGameLogic()));
+        }
+        return appResult;
     }
     catch(std::exception& e)
     {
@@ -774,6 +800,6 @@ SDL_AppResult SDL_AppIterate(void* appState)
 
 void SDL_AppQuit(void* appState, SDL_AppResult result)
 {
-    delete static_cast<Application*>(appState);
+    delete static_cast<AppWrap*>(appState);
 }
 

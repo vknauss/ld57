@@ -1226,6 +1226,7 @@ struct GameLogic final: eng::GameLogicInterface
 
             if (input.getBoolean(inputs.quit))
             {
+                app.requestReload();
                 audio.destroyLoop(themeLoop);
                 themeLoop = audio.createLoop("resources/audio/GasStationThemereal.wav");
                 currentDungeon = 0;
@@ -1256,6 +1257,7 @@ struct GameLogic final: eng::GameLogicInterface
                     }
                     else
                     {
+                        app.requestReload();
                         currentScreen = Screens::Title;
                         animationCounter = 0;
                         animationTimer = 0;
