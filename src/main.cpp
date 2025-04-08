@@ -280,10 +280,10 @@ struct GameCommon
         {
             auto dungeon = Dungeon::generate(Dungeon::GenerationParams {
                         .seed = static_cast<uint64_t>(time(0)),
-                        .width = 60,
-                        .height = 40,
-                        .partitionedRoomCount = 45,
-                        .targetRoomCount = 8,
+                        .width = static_cast<uint32_t>(30 + 20 * i),
+                        .height = static_cast<uint32_t>(30 + 20 * i),
+                        .partitionedRoomCount = static_cast<uint32_t>(20 + 40 * i),
+                        .targetRoomCount = static_cast<uint32_t>(6 + 4 * i),
                         .minSplitDimension = 6,
                         .minPortalOverlap = 2,
                     });
@@ -294,6 +294,7 @@ struct GameCommon
                     { textures.obstacle[i], resourceLoader.createGeometry(geometry.obstacleSides) },
                     { textures.obstacleTop[i], resourceLoader.createGeometry(geometry.obstacleTops) },
                 });
+            std::cout << dungeon.rooms.size() << " " << dungeon.spawnPoints.size() << std::endl;
             dungeons.push_back(std::move(dungeon));
         }
     }
@@ -907,6 +908,7 @@ struct GameSceneRunner : public JPH::CharacterContactListener
         if (std::erase_if(enemies, [](const auto& enemy){ return enemy.lastState == Enemy::State::Dead; }))
         {
             counterOverlayTimeStamp = animationTimer;
+            audio.createSingleShot("resources/audio/spiderdeath.wav");
             if (enemies.empty())
             {
                 playerState = PlayerStates::FallingInHole;
@@ -1166,7 +1168,7 @@ struct GameLogic final: eng::GameLogicInterface
             .quit = input.mapKey(input.createMapping(), SDL_GetScancodeFromKey(SDLK_ESCAPE, nullptr), eng::InputInterface::BoolStateEvent::Pressed),
         };
 
-        screens[Screens::Title] = { resourceLoader.loadTexture("resources/textures/title.png") };
+        screens[Screens::Title] = getIndexedTextures(resourceLoader, "resources/textures/title/TITLESCREEN{:}.png", 1, 3);
         screens[Screens::Lose] = { resourceLoader.loadTexture("resources/textures/gameover.png") };
         screens[Screens::Win] = { resourceLoader.loadTexture("resources/textures/win.png") };
     }
@@ -1306,7 +1308,7 @@ eng::ApplicationInfo EngineApp_GetApplicationInfo()
     return eng::ApplicationInfo {
         .appName = "xterminator",
         .appVersion = 0,
-        .windowTitle = "XTerminator",
+        .windowTitle = "X Terminator Sim 2036",
         .windowWidth = 1920,
         .windowHeight = 1080,
     };

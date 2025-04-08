@@ -30,7 +30,7 @@ Dungeon Dungeon::generate(const Dungeon::GenerationParams& params)
         Room parent = splitQueue.top();
         splitQueue.pop();
 
-        if (std::max(parent.width, parent.height) < params.minSplitDimension)
+        if (std::max(parent.width, parent.height) <= params.minSplitDimension)
         {
             rooms.push_back(parent);
             continue;
@@ -278,7 +278,8 @@ Dungeon Dungeon::generate(const Dungeon::GenerationParams& params)
 
             if (&room == &rooms[playerStartRoom])
             {
-                while (true)
+                playerSpawn = { room.x + 1, room.y + 1 };
+                for (int i = 0; i < 10000; ++i)
                 {
                     uint32_t x = prng() % (room.width - 2);
                     uint32_t y = prng() % (room.height - 2);
