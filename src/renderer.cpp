@@ -973,7 +973,7 @@ void GBuffer::recreate(const vk::raii::Device& device, const vma::Allocator& all
         });
 }
 
-Renderer::Renderer(const vk::raii::Device& device, const vk::raii::Queue& queue, const uint32_t queueFamilyIndex, const vma::Allocator& allocator, const std::vector<Texture>& textures, const vk::Buffer geometryVertexBuffer, const vk::Buffer geometryIndexBuffer, const uint32_t numFramesInFlight, const vk::Format colorAttachmentFormat, const vk::Format depthAttachmentFormat, const vk::Extent2D& framebufferExtent) :
+Renderer::Renderer(const vk::raii::Device& device, const vk::raii::Queue& queue, const uint32_t queueFamilyIndex, const vma::Allocator& allocator, const std::vector<Texture>& textures, const vk::Buffer geometryVertexBuffer, const vk::Buffer geometryIndexBuffer, const uint32_t numFramesInFlight, const vk::Format colorAttachmentFormat, const vk::Format depthAttachmentFormat, const vk::Extent2D& framebufferExtent, const uint32_t minUniformBufferOffsetAlignment) :
     device(device),
     queue(queue),
     allocator(allocator),
@@ -983,6 +983,8 @@ Renderer::Renderer(const vk::raii::Device& device, const vk::raii::Queue& queue,
     decalGeometryBuffer(createDecalGeometryBuffer(device, queue, queueFamilyIndex, allocator)),
     textureSampler(device, vk::SamplerCreateInfo {}),
     descriptorPool(createDescriptorPool(device, textures.size(), numFramesInFlight)),
+    uniformBufferAlignedSizeVertex(minUniformBufferOffsetAlignment * ((UniformBlockSize::VertexShader - 1) / minUniformBufferOffsetAlignment + 1)),
+    uniformBufferAlignedSizeFragment(minUniformBufferOffsetAlignment * ((UniformBlockSize::FragmentShader - 1) / minUniformBufferOffsetAlignment + 1)),
     ambientOcclusionTextureExtent(framebufferExtent.width / 4, framebufferExtent.height / 4),
     ambientOcclusionTexture(createTexture(device, allocator,
                 { ambientOcclusionTextureExtent.width, ambientOcclusionTextureExtent.height, 1},
@@ -1166,6 +1168,7 @@ void Renderer::updateFrame(SceneInterface& scene, const std::vector<RenderGeomet
         writeData(uniformBufferWritePointer, sceneLayer.view);
         const float aspectRatio = sceneLayer.viewport.extent.x / sceneLayer.viewport.extent.y;
         writeData(uniformBufferWritePointer, glm::orthoRH_ZO<float>(-aspectRatio, aspectRatio, -1, 1, 0, 1));
+        uniformBufferWritePointer += uniformBufferAlignedSizeVertex - UniformBlockSize::VertexShader;
 
         writeData(uniformBufferWritePointer, glm::inverse(sceneLayer.projection));
         writeData(uniformBufferWritePointer, sceneLayer.projection);
@@ -1175,6 +1178,7 @@ void Renderer::updateFrame(SceneInterface& scene, const std::vector<RenderGeomet
         writeData<float>(uniformBufferWritePointer, 0);
         writeData(uniformBufferWritePointer, gBuffer.extent.width);
         writeData(uniformBufferWritePointer, gBuffer.extent.height);
+        uniformBufferWritePointer += uniformBufferAlignedSizeFragment - UniformBlockSize::FragmentShader;
 
         const std::array spriteInstanceVectors { &sceneLayer.spriteInstances, &sceneLayer.overlaySpriteInstances };
         for (const auto& pInstanceVector : spriteInstanceVectors)
@@ -1277,7 +1281,7 @@ void Renderer::updateFrame(SceneInterface& scene, const std::vector<RenderGeomet
             writeData(decalWritePointer, glm::vec3(0));
         }
 
-        uniformBufferOffset += UniformBlockSize::Combined;
+        uniformBufferOffset += uniformBufferAlignedSizeVertex + uniformBufferAlignedSizeFragment;
         spriteInstanceIndex += sceneLayer.spriteInstances.size() + sceneLayer.overlaySpriteInstances.size();
         geometryInstanceIndex += sceneLayer.geometryInstances.size();
         indirectBufferIndex += requiredIndirectBuffers;
@@ -1371,7 +1375,7 @@ void Renderer::renderLayerGBuffer(const vk::raii::CommandBuffer& commandBuffer, 
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayouts.gBuffer, 0, {
             descriptorSets.textureArray,
             frameData.descriptorSets[FrameDataDescriptorSetIDs::SceneUniformData],
-        }, { layerDrawInfo.uniformBufferOffset, layerDrawInfo.uniformBufferOffset + UniformBlockSize::VertexShader });
+        }, { layerDrawInfo.uniformBufferOffset, layerDrawInfo.uniformBufferOffset + uniformBufferAlignedSizeVertex });
 
     if (layerDrawInfo.spriteInstanceCount > 0)
     {
@@ -1466,7 +1470,7 @@ void Renderer::renderLayerGBuffer(const vk::raii::CommandBuffer& commandBuffer, 
                 descriptorSets.textureArray,
             }, {
                 layerDrawInfo.uniformBufferOffset,
-                layerDrawInfo.uniformBufferOffset + UniformBlockSize::VertexShader,
+                layerDrawInfo.uniformBufferOffset + uniformBufferAlignedSizeVertex,
             });
 
         commandBuffer.bindVertexBuffers(0, *std::get<0>(decalGeometryBuffer), { 0 });
@@ -1558,7 +1562,7 @@ void Renderer::renderLayerSSAO(const vk::raii::CommandBuffer& commandBuffer, con
             frameData.descriptorSets[FrameDataDescriptorSetIDs::SceneUniformData],
         }, {
             layerDrawInfo.uniformBufferOffset,
-            layerDrawInfo.uniformBufferOffset + UniformBlockSize::VertexShader
+            layerDrawInfo.uniformBufferOffset + uniformBufferAlignedSizeVertex
         });
 
     commandBuffer.draw(3, 1, 0, 0);
@@ -1762,7 +1766,7 @@ void Renderer::drawFrame(const Swapchain& swapchain, const glm::vec2& viewportEx
                 descriptorSets.shadowCubeMapArray,
             }, {
                 layerDrawInfo.uniformBufferOffset,
-                layerDrawInfo.uniformBufferOffset + UniformBlockSize::VertexShader
+                layerDrawInfo.uniformBufferOffset + uniformBufferAlignedSizeVertex
             });
 
         commandBuffer.draw(3, 1, 0, 0);

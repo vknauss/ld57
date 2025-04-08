@@ -658,7 +658,8 @@ public:
         geometryIndexBuffer(geometryBuffers ? *std::get<0>(geometryBuffers->second) : nullptr),
         renderer(device, queue, queueFamilyIndex, *allocator,
                 textures, geometryVertexBuffer, geometryIndexBuffer, 3,
-                surfaceFormat.format, depthFormat, window.getFramebufferExtent()),
+                surfaceFormat.format, depthFormat, window.getFramebufferExtent(),
+                physicalDevice.getProperties().limits.minUniformBufferOffsetAlignment),
         loaderUtilityFinalize(loaderUtility),
         lastTime(SDL_GetTicksNS() * 1.e-9)
     {
@@ -737,7 +738,18 @@ public:
         renderer.nextFrame();
         renderer.beginFrame();
         renderer.updateFrame(scene, geometry);
-        renderer.drawFrame(swapchain, glm::vec2(scene.framebufferSize_.first, scene.framebufferSize_.second));
+
+        try
+        {
+            renderer.drawFrame(swapchain, glm::vec2(scene.framebufferSize_.first, scene.framebufferSize_.second));
+        }
+        catch (vk::OutOfDateKHRError& e)
+        {
+            const vk::Extent2D framebufferExtent = window.getFramebufferExtent();
+            swapchain.recreate(framebufferExtent);
+            renderer.updateFramebufferExtent(framebufferExtent);
+            scene.framebufferSize_ = { framebufferExtent.width, framebufferExtent.height };
+        }
         inputManager.nextFrame();
         return appInterface.quitRequested ? FrameResult::Quit :
             appInterface.reloadRequested ? FrameResult::Reload :

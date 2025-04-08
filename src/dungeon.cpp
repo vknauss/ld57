@@ -1,5 +1,6 @@
 #include "dungeon.hpp"
 
+#include <numeric>
 #include <queue>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>

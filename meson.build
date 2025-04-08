@@ -1,6 +1,6 @@
 project('ld57', 'cpp',
   default_options: {
-    'cpp_std': 'c++23',
+    'cpp_std': 'c++20',
     'prefix': join_paths(meson.project_source_root(), 'install'),
     'bindir': '',
     'datadir': '',

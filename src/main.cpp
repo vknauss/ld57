@@ -4,6 +4,7 @@
 #include "jph_glm_convert.hpp"
 
 #include <iostream>
+#include <numeric>
 #include <memory>
 #include <vector>
 #include <glm/glm.hpp>

@@ -87,7 +87,7 @@ namespace eng
     struct Renderer
     {
 
-        explicit Renderer(const vk::raii::Device& device, const vk::raii::Queue& queue, const uint32_t queueFamilyIndex, const vma::Allocator& allocator, const std::vector<Texture>& textures, const vk::Buffer geometryVertexBuffer, const vk::Buffer geometryIndexBuffer, const uint32_t numFramesInFlight, const vk::Format colorAttachmentFormat, const vk::Format depthAttachmentFormat, const vk::Extent2D& framebufferExtent);
+        explicit Renderer(const vk::raii::Device& device, const vk::raii::Queue& queue, const uint32_t queueFamilyIndex, const vma::Allocator& allocator, const std::vector<Texture>& textures, const vk::Buffer geometryVertexBuffer, const vk::Buffer geometryIndexBuffer, const uint32_t numFramesInFlight, const vk::Format colorAttachmentFormat, const vk::Format depthAttachmentFormat, const vk::Extent2D& framebufferExtent, const uint32_t minUniformBufferOffsetAlignment);
 
         void beginFrame();
         void updateFrame(SceneInterface& scene, const std::vector<RenderGeometry>& geometry);
@@ -109,6 +109,8 @@ namespace eng
         const AllocatedBuffer decalGeometryBuffer;
         const vk::raii::Sampler textureSampler;
         const vk::raii::DescriptorPool descriptorPool;
+        const uint32_t uniformBufferAlignedSizeVertex;
+        const uint32_t uniformBufferAlignedSizeFragment;
         vk::Extent2D ambientOcclusionTextureExtent;
         Texture ambientOcclusionTexture;
         std::vector<CubeMap> shadowCubeMaps;
