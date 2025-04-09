@@ -307,8 +307,8 @@ static vk::raii::Pipeline createPipeline(const vk::raii::Device& device, const P
             .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
             .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
             .colorBlendOp = vk::BlendOp::eAdd,
-            .srcAlphaBlendFactor = vk::BlendFactor::eSrcAlpha,
-            .dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+            .srcAlphaBlendFactor = vk::BlendFactor::eOne,
+            .dstAlphaBlendFactor = vk::BlendFactor::eOne,
             .alphaBlendOp = vk::BlendOp::eAdd,
             .colorWriteMask = vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags,
         });

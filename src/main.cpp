@@ -1309,8 +1309,8 @@ eng::ApplicationInfo EngineApp_GetApplicationInfo()
         .appName = "xterminator",
         .appVersion = 0,
         .windowTitle = "X Terminator Sim 2036",
-        .windowWidth = 1920,
-        .windowHeight = 1080,
+        .windowWidth = 1280,
+        .windowHeight = 720,
     };
 }
 
